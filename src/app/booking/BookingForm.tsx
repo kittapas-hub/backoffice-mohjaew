@@ -93,32 +93,38 @@ export default function BookingForm({ source }: { source: string }) {
     router.push(`/booking/success?token=${encodeURIComponent(data.token)}`);
   }
 
-  const input =
-    "w-full rounded-lg border border-gray-300 px-4 py-2.5 text-base outline-none focus:border-rose-500";
-
   return (
-    <form onSubmit={onSubmit} className="space-y-5">
-      <div>
-        <label className="mb-1 block text-sm font-medium">เลือกวัน</label>
-        <input
-          type="date"
-          value={date}
-          min={todayISO()}
-          onChange={(e) => setDate(e.target.value)}
-          className={input}
-        />
-      </div>
+    <form onSubmit={onSubmit} className="booking-panel">
+      <section className="booking-section">
+        <h2 className="booking-section-title">
+          <span className="booking-step">1</span>
+          เลือกวันนัด
+        </h2>
+        <label className="booking-field">
+          <span className="booking-label">วันที่ต้องการจอง</span>
+          <input
+            type="date"
+            value={date}
+            min={todayISO()}
+            onChange={(e) => setDate(e.target.value)}
+            className="booking-input"
+          />
+        </label>
+      </section>
 
-      <div>
-        <label className="mb-2 block text-sm font-medium">เลือกรอบเวลา</label>
+      <section className="booking-section">
+        <h2 className="booking-section-title">
+          <span className="booking-step">2</span>
+          เลือกรอบเวลา
+        </h2>
         {loadingSlots ? (
-          <p className="text-sm text-gray-400">กำลังโหลดรอบที่ว่าง...</p>
+          <p className="booking-alert booking-alert-muted">กำลังโหลดรอบที่ว่าง...</p>
         ) : slots.length === 0 ? (
-          <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+          <p className="booking-alert booking-alert-muted">
             วันนี้ยังไม่มีรอบที่เปิดรับจอง กรุณาเลือกวันอื่น
           </p>
         ) : (
-          <div className="grid grid-cols-1 gap-2">
+          <div className="booking-slots">
             {slots.map((s) => (
               <button
                 type="button"
@@ -127,70 +133,68 @@ export default function BookingForm({ source }: { source: string }) {
                   setSlotId(s.id);
                   idemKey.current = ""; // new slot = new booking attempt
                 }}
-                className={`flex items-center justify-between rounded-lg border px-4 py-3 text-left ${
-                  slotId === s.id
-                    ? "border-rose-600 bg-rose-50"
-                    : "border-gray-300 bg-white"
+                className={`booking-slot ${
+                  slotId === s.id ? "booking-slot-selected" : ""
                 }`}
               >
-                <span className="font-medium">{s.label}</span>
-                <span className="text-sm text-gray-500">
-                  เหลือ {s.remaining} คิว
-                </span>
+                <span className="booking-slot-label">{s.label}</span>
+                <span className="booking-slot-meta">เหลือ {s.remaining} คิว</span>
               </button>
             ))}
           </div>
         )}
-      </div>
+      </section>
 
-      <div className="space-y-3">
-        <div>
-          <label className="mb-1 block text-sm font-medium">ชื่อเล่น</label>
-          <input
-            required
-            value={form.nickname}
-            onChange={(e) => setForm({ ...form, nickname: e.target.value })}
-            className={input}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium">เบอร์โทรศัพท์</label>
-          <input
-            required
-            type="tel"
-            inputMode="tel"
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            className={input}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium">
-            วัน/เดือน/ปีเกิด
+      <section className="booking-section">
+        <h2 className="booking-section-title">
+          <span className="booking-step">3</span>
+          ข้อมูลผู้จอง
+        </h2>
+        <div className="booking-form-grid">
+          <label className="booking-field">
+            <span className="booking-label">ชื่อเล่น</span>
+            <input
+              required
+              value={form.nickname}
+              onChange={(e) => setForm({ ...form, nickname: e.target.value })}
+              className="booking-input"
+            />
           </label>
-          <input
-            required
-            value={form.birthDateText}
-            onChange={(e) => setForm({ ...form, birthDateText: e.target.value })}
-            placeholder="เช่น 1 มกราคม 2540"
-            className={input}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium">
-            หัวข้อที่ต้องการปรึกษา
+          <label className="booking-field">
+            <span className="booking-label">เบอร์โทรศัพท์</span>
+            <input
+              required
+              type="tel"
+              inputMode="tel"
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              className="booking-input"
+            />
           </label>
-          <textarea
-            required
-            rows={3}
-            value={form.consultationTopic}
-            onChange={(e) =>
-              setForm({ ...form, consultationTopic: e.target.value })
-            }
-            className={input}
-          />
+          <label className="booking-field">
+            <span className="booking-label">วัน/เดือน/ปีเกิด</span>
+            <input
+              required
+              value={form.birthDateText}
+              onChange={(e) => setForm({ ...form, birthDateText: e.target.value })}
+              placeholder="เช่น 1 มกราคม 2540"
+              className="booking-input"
+            />
+          </label>
+          <label className="booking-field">
+            <span className="booking-label">หัวข้อที่ต้องการปรึกษา</span>
+            <textarea
+              required
+              rows={3}
+              value={form.consultationTopic}
+              onChange={(e) =>
+                setForm({ ...form, consultationTopic: e.target.value })
+              }
+              className="booking-textarea"
+            />
+          </label>
         </div>
-      </div>
+      </section>
 
       {/* Honeypot — visually hidden, off the tab order, ignored by humans. */}
       <input
@@ -201,23 +205,19 @@ export default function BookingForm({ source }: { source: string }) {
         aria-hidden="true"
         value={company}
         onChange={(e) => setCompany(e.target.value)}
-        className="absolute left-[-9999px] h-0 w-0 opacity-0"
+        className="booking-hidden-field"
       />
 
-      {error && (
-        <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>
-      )}
+      <section className="booking-section">
+        {error && <p className="booking-alert booking-alert-error">{error}</p>}
 
-      <button
-        type="submit"
-        disabled={submitting || !slotId}
-        className="w-full rounded-lg bg-rose-600 px-4 py-3 text-base font-semibold text-white disabled:opacity-50"
-      >
-        {submitting ? "กำลังจอง..." : "ยืนยันการจองคิว"}
-      </button>
-      <p className="text-center text-xs text-gray-400">
-        เมื่อจองแล้วระบบจะถือคิวให้ 60 นาที เพื่อรอการชำระเงิน
-      </p>
+        <button type="submit" disabled={submitting || !slotId} className="booking-submit">
+          {submitting ? "กำลังจอง..." : "ยืนยันการจองคิว"}
+        </button>
+        <p className="booking-note">
+          เมื่อจองแล้วระบบจะถือคิวให้ 60 นาที เพื่อรอการชำระเงิน
+        </p>
+      </section>
     </form>
   );
 }

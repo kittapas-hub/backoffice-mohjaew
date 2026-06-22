@@ -14,14 +14,18 @@ export default async function BookingPage({
   const validSource = isAllowedSource(source) ? source : "website";
 
   return (
-    <main className="mx-auto min-h-screen max-w-md px-5 py-8">
-      <header className="mb-6 text-center">
-        <h1 className="text-2xl font-bold text-rose-700">จองคิวปรึกษาหมอแจว</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          เลือกวันและรอบเวลาที่สะดวก แล้วกรอกข้อมูลเพื่อจองคิว
-        </p>
-      </header>
-      <BookingForm source={validSource} />
+    <main className="booking-page">
+      <div className="booking-shell">
+        <header className="booking-hero">
+          <p className="booking-eyebrow">Mohjaew Booking</p>
+          <h1 className="booking-title">จองคิวปรึกษาหมอแจว</h1>
+          <p className="booking-subtitle">
+            เลือกวันและรอบเวลาที่สะดวก จากนั้นกรอกข้อมูลเพื่อถือคิวไว้ 60 นาที
+            ระหว่างรอการชำระเงิน
+          </p>
+        </header>
+        <BookingForm source={validSource} />
+      </div>
     </main>
   );
 }
