@@ -88,14 +88,9 @@ export default function BookingForm({ source }: { source: string }) {
 
     idemKey.current = ""; // next booking gets a fresh key
 
-    // Only non-PII values in the query string.
-    const q = new URLSearchParams({
-      ref: data.reference,
-      q: String(data.queueNumber),
-      date,
-      slot: data.slotLabel,
-    });
-    router.push(`/booking/success?${q.toString()}`);
+    // Pass only the booking token (full UUID). The success page fetches
+    // all display data from the DB — no booking details travel via URL.
+    router.push(`/booking/success?token=${encodeURIComponent(data.token)}`);
   }
 
   const input =

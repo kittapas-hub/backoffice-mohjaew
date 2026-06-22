@@ -1,10 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { APP_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/env";
 
-export default function LoginPage() {
+const CALLBACK_ERRORS: Record<string, string> = {
+  otp_expired: "ลิงก์หมดอายุหรือถูกใช้แล้ว กรุณาขอลิงก์ใหม่",
+  unauthorized: "อีเมลนี้ไม่มีสิทธิ์เข้าถึง Backoffice",
+};
+
+function LoginForm() {
+  const searchParams = useSearchParams();
+  const callbackError = searchParams.get("error");
+
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -14,7 +23,7 @@ export default function LoginPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!supabaseConfigured) {
-      setError("Supabase environment variables are not configured on Vercel yet.");
+      setError("Supabase environment variables are not configured yet.");
       return;
     }
     setLoading(true);
@@ -23,7 +32,7 @@ export default function LoginPage() {
     const origin = APP_URL || window.location.origin;
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
-      options: { emailRedirectTo: `${origin}/auth/callback` },
+      options: { emailRedirectTo: `${origin}/auth/callback?next=/admin` },
     });
     setLoading(false);
     if (error) setError(error.message);
@@ -37,15 +46,21 @@ export default function LoginPage() {
 
       {!supabaseConfigured && (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          Supabase environment variables are missing on Vercel. Add
+          Supabase environment variables are missing. Add
           NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then
           redeploy.
         </div>
       )}
 
+      {callbackError && CALLBACK_ERRORS[callbackError] && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          {CALLBACK_ERRORS[callbackError]}
+        </div>
+      )}
+
       {sent ? (
         <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800">
-          ส่งลิงก์เข้าสู่ระบบไปที่อีเมลแล้ว กรุณาตรวจสอบกล่องจดหมายของคุณ
+          ส่งลิงก์เข้าสู่ระบบแล้ว กรุณาเปิดอีเมลฉบับล่าสุด
         </div>
       ) : (
         <form onSubmit={onSubmit} className="space-y-4">
@@ -68,5 +83,13 @@ export default function LoginPage() {
         </form>
       )}
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

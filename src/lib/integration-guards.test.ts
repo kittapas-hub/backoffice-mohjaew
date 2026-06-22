@@ -131,4 +131,54 @@ for (const f of clientFiles) {
   }
 }
 
+// --- 7. /booking/success: token-based DB lookup, no PII in URL ---------------
+
+// success page reads only `token` from searchParams (not individual fields).
+const successPage = read("app/booking/success/page.tsx");
+assert.match(
+  successPage,
+  /token.*searchParams|searchParams.*token/,
+  "success page must read `token` from searchParams",
+);
+for (const oldParam of ["slot", "exp"]) {
+  assert.doesNotMatch(
+    successPage,
+    new RegExp(`searchParams.*\\b${oldParam}\\b|\\b${oldParam}\\b.*searchParams`),
+    `success page must not read \`${oldParam}\` directly from searchParams`,
+  );
+}
+
+// getBookingByToken must not select PII columns from the DB.
+const coreSrc = read("lib/booking-core.ts");
+const fnStart = coreSrc.indexOf("export async function getBookingByToken");
+const fnEnd = coreSrc.indexOf("\nexport ", fnStart + 1);
+const getBookingFn = coreSrc.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+for (const pii of ["nickname", "phone", "birth_date_text", "consultation_topic"]) {
+  assert.doesNotMatch(
+    getBookingFn,
+    new RegExp(pii),
+    `getBookingByToken must not select PII field: ${pii}`,
+  );
+}
+
+// POST /api/bookings must return token (full booking UUID).
+assert.match(
+  bookingsRoute,
+  /token.*b\.id|b\.id.*token/,
+  "POST /api/bookings must return token (booking UUID)",
+);
+
+// BookingForm must redirect with only the token — not individual booking fields.
+const bookingForm = read("app/booking/BookingForm.tsx");
+assert.match(
+  bookingForm,
+  /booking\/success.*token/,
+  "BookingForm must pass token in success redirect",
+);
+assert.doesNotMatch(
+  bookingForm,
+  /booking\/success[^`'"]*(?:ref=|&q=|&date=|&slot=|&exp=)/,
+  "BookingForm must not put individual booking fields in the success URL",
+);
+
 console.log("integration-guards self-check passed");

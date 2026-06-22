@@ -49,6 +49,20 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   return adminEmails().includes(email.toLowerCase());
 }
 
+// Payment instructions displayed on /booking/success.
+// All four fields (amount, bankName, accountName, accountNumber) must be set
+// for the payment card to appear; if any is empty a safe fallback is shown.
+export function paymentConfig() {
+  return {
+    amount: process.env.BOOKING_PAYMENT_AMOUNT_THB ?? "",
+    bankName: process.env.BOOKING_BANK_NAME ?? "",
+    accountName: process.env.BOOKING_ACCOUNT_NAME ?? "",
+    accountNumber: process.env.BOOKING_ACCOUNT_NUMBER ?? "",
+    qrPath: process.env.BOOKING_PAYMENT_QR_PATH ?? "",
+    lineOaUrl: process.env.NEXT_PUBLIC_LINE_OA_URL ?? "",
+  };
+}
+
 export function bookingStartKeywords(): string[] {
   const raw = process.env.BOOKING_START_KEYWORDS ?? "จองคิวปรึกษาหมอแจว";
   return raw

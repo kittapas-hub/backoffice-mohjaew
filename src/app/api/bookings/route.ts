@@ -123,7 +123,10 @@ export async function POST(req: Request) {
 
   const b = result.booking;
   return NextResponse.json({
-    // Short, non-PII reference for the customer.
+    // token = full booking UUID (122-bit entropy) — used by /booking/success
+    // to look up booking data from the DB without trusting query-string params.
+    token: b.id,
+    // Short human-readable reference (first 8 hex chars, still non-PII).
     reference: b.id.slice(0, 8).toUpperCase(),
     queueNumber: b.queue_number,
     status: b.status,

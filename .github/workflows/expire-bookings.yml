@@ -1,0 +1,26 @@
+name: Expire pending bookings
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  expire-pending-bookings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call expire bookings endpoint
+        env:
+          BOOKING_APP_URL: ${{ secrets.BOOKING_APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$BOOKING_APP_URL"
+          test -n "$CRON_SECRET"
+
+          curl --fail --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --request GET \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${BOOKING_APP_URL}/api/cron/expire-bookings"

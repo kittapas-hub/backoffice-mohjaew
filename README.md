@@ -73,6 +73,12 @@ migration จะสร้าง bucket `booking-faces` แบบ **private** ใ
 | `LINE_BOOKING_NOTIFY_GROUP_ID` | group ID ของกลุ่มทีมงานที่จะรับแจ้งเตือน |
 | `ADMIN_EMAILS` | อีเมลแอดมินที่อนุญาตให้เข้า `/admin` คั่นด้วย comma |
 | `BOOKING_START_KEYWORDS` | คีย์เวิร์ดเริ่มจอง (ดีฟอลต์ `จองคิวปรึกษาหมอแจว`) คั่นด้วย comma |
+| `BOOKING_PAYMENT_AMOUNT_THB` | ยอดชำระเงิน (บาท) แสดงบนหน้า `/booking/success` |
+| `BOOKING_BANK_NAME` | ชื่อธนาคาร เช่น `กสิกรไทย` |
+| `BOOKING_ACCOUNT_NAME` | ชื่อบัญชี |
+| `BOOKING_ACCOUNT_NUMBER` | เลขบัญชี |
+| `BOOKING_PAYMENT_QR_PATH` | path รูป QR (relative จาก `public/`) ดีฟอลต์ `/payment-qr.png` |
+| `NEXT_PUBLIC_LINE_OA_URL` | URL LINE OA สำหรับปุ่ม "ส่งสลิปผ่าน LINE" เช่น `https://line.me/R/ti/p/@youroa` |
 
 ## 4. รันในเครื่อง
 
@@ -162,7 +168,19 @@ session ที่เริ่มจองแล้วไม่ทำต่อจ
   - **ต้องตั้ง `CRON_SECRET` เสมอ** และส่ง header `Authorization: Bearer <CRON_SECRET>` ทุกครั้ง
   - ถ้าไม่ได้ตั้ง `CRON_SECRET` → endpoint ปิด (ตอบ `503 cron_disabled`) ไม่เปิดสาธารณะ
   - token ผิด/ไม่ส่ง → `401`
-  - ตั้ง Vercel Cron ยิงทุก ~5 นาที (ใส่ secret header) เมื่อพร้อมเปิดใช้
+  - โปรเจกต์นี้ใช้ GitHub Actions scheduler ที่ `.github/workflows/expire-bookings.yml`
+    เพื่อยิง endpoint ทุก 5 นาทีแทน Vercel Cron
+  - ห้ามเพิ่ม `vercel.json` cron สำหรับ endpoint นี้บน Vercel Hobby
+
+#### ตั้งค่า GitHub Actions scheduler
+
+1. ไปที่ GitHub repo → **Settings** → **Secrets and variables** → **Actions**
+2. เพิ่ม Repository secrets:
+   - `BOOKING_APP_URL`: URL ของแอป เช่น `https://your-app.vercel.app` (ไม่ต้องมี `/` ท้าย URL)
+   - `CRON_SECRET`: ค่าเดียวกับ environment variable `CRON_SECRET` ที่ตั้งไว้ในแอป
+3. Workflow จะรันอัตโนมัติทุก 5 นาทีตาม schedule `*/5 * * * *`
+4. วิธีทดสอบเอง: ไปที่ **Actions** → **Expire pending bookings** → **Run workflow**
+5. ถ้า endpoint ตอบไม่ใช่ 2xx, step `curl --fail` จะทำให้ workflow ล้มเหลวเพื่อให้เห็นปัญหาใน Actions logs
 
 ### LINE notify (public booking)
 - เมื่อจองสำเร็จ ระบบส่งแจ้งทีมผ่าน `notifyTeamSafe` (วัน/รอบ/ชื่อ/เบอร์/หัวข้อ/source/สถานะ/ลิงก์ Backoffice)
@@ -172,6 +190,38 @@ session ที่เริ่มจองแล้วไม่ทำต่อจ
 ### LINE OA → ลิงก์เข้าหน้าจอง
 ไม่ต้องแก้โค้ด — ตั้งใน LINE OA Manager (Rich menu / ข้อความ) ให้ลิงก์ไปที่
 `https://your-app.vercel.app/booking?source=line`
+
+## 11. ตั้งค่า Payment Instructions
+
+หน้า `/booking/success` แสดงรายละเอียดชำระเงินถ้ากรอก env vars ครบทั้ง 4 ตัว
+(`BOOKING_PAYMENT_AMOUNT_THB`, `BOOKING_BANK_NAME`, `BOOKING_ACCOUNT_NAME`, `BOOKING_ACCOUNT_NUMBER`)
+ถ้าตัวใดว่าง ระบบจะแสดงข้อความสำรอง "ทีมงานจะติดต่อเพื่อแจ้งรายละเอียดการชำระเงิน" แทน
+
+### วาง QR code
+
+1. เตรียมรูป QR สำหรับโอนเงิน (ขนาดแนะนำ 400×400 px)
+2. วางไฟล์ที่ `public/payment-qr.png`
+3. ตั้ง `BOOKING_PAYMENT_QR_PATH=/payment-qr.png` ใน Vercel Environment Variables
+
+> QR จะไม่แสดงถ้า `BOOKING_PAYMENT_QR_PATH` ว่าง
+
+### LINE OA สำหรับส่งสลิป
+
+ตั้ง `NEXT_PUBLIC_LINE_OA_URL` เป็น URL ของ LINE OA (เช่น `https://line.me/R/ti/p/@youroa`)
+ปุ่ม "ส่งสลิปผ่าน LINE" จะไม่แสดงถ้า env ว่าง
+
+### Environment Variables ที่ต้องตั้งบน Vercel Production
+
+| ตัวแปร | หมายเหตุ |
+| --- | --- |
+| `BOOKING_PAYMENT_AMOUNT_THB` | ยอดชำระ (ตัวเลขล้วน ไม่มีสกุลเงิน) |
+| `BOOKING_BANK_NAME` | ธนาคาร เช่น `กสิกรไทย` |
+| `BOOKING_ACCOUNT_NAME` | ชื่อบัญชี |
+| `BOOKING_ACCOUNT_NUMBER` | เลขบัญชี (ไม่มีขีด) |
+| `BOOKING_PAYMENT_QR_PATH` | `/payment-qr.png` (ถ้าวางไฟล์แล้ว) |
+| `NEXT_PUBLIC_LINE_OA_URL` | URL LINE OA |
+
+---
 
 ## 9. Security / RPC boundary
 

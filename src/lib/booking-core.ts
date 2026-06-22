@@ -99,6 +99,57 @@ async function sendTeamNotify(b: CreatedBooking, birthDateText: string) {
   await notifyTeamSafe(text);
 }
 
+export type BookingTokenData = {
+  reference: string;       // first 8 chars of id, uppercase (display only)
+  status: string;
+  queueNumber: number | null;
+  holdExpiresAt: string | null;
+  slotLabel: string | null;   // bookings.preferred_time
+  bookingDate: string | null; // booking_slots.booking_date (YYYY-MM-DD)
+};
+
+/** Looks up non-PII booking data by the full booking UUID (token).
+ *  Selects only id, status, queue_number, hold_expires_at, preferred_time, and
+ *  the related slot's booking_date — no name / phone / birth date returned. */
+export async function getBookingByToken(
+  token: string,
+): Promise<BookingTokenData | null> {
+  if (!UUID_RE.test(token)) return null;
+
+  const db = supabaseAdmin();
+  const { data, error } = await db
+    .from("bookings")
+    .select(
+      "id, status, queue_number, hold_expires_at, preferred_time, booking_slots(booking_date)",
+    )
+    .eq("id", token)
+    .single();
+
+  if (error || !data) return null;
+
+  const row = data as {
+    id: string;
+    status: string;
+    queue_number: number | null;
+    hold_expires_at: string | null;
+    preferred_time: string | null;
+    booking_slots: { booking_date: string } | { booking_date: string }[] | null;
+  };
+
+  const slotRow = Array.isArray(row.booking_slots)
+    ? row.booking_slots[0]
+    : row.booking_slots;
+
+  return {
+    reference: row.id.slice(0, 8).toUpperCase(),
+    status: row.status,
+    queueNumber: row.queue_number,
+    holdExpiresAt: row.hold_expires_at,
+    slotLabel: row.preferred_time,
+    bookingDate: slotRow?.booking_date ?? null,
+  };
+}
+
 export type OpenSlot = {
   id: string;
   booking_date: string;
