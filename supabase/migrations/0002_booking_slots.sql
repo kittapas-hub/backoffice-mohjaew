@@ -14,7 +14,7 @@ create table if not exists public.booking_slots (
   start_time   time not null,
   end_time     time not null,
   label        text not null,
-  capacity     int  not null default 3 check (capacity >= 0),
+  capacity     int  not null default 1 check (capacity >= 0),
   is_open      boolean not null default true,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now(),
@@ -123,7 +123,7 @@ create or replace function public.create_booking(
   p_phone text,
   p_consultation_topic text,
   p_birth_date_text text,
-  p_hold_minutes int default 60,
+  p_hold_minutes int default 10,
   p_idempotency_key text default null
 )
 returns public.bookings
@@ -164,6 +164,14 @@ begin
     raise exception 'slot_not_found';
   end if;
   if not v_slot.is_open then
+    raise exception 'slot_closed';
+  end if;
+  -- Do not allow new bookings after the round has started in Thailand time.
+  if v_slot.booking_date < (now() at time zone 'Asia/Bangkok')::date
+     or (
+       v_slot.booking_date = (now() at time zone 'Asia/Bangkok')::date
+       and v_slot.start_time <= (now() at time zone 'Asia/Bangkok')::time
+     ) then
     raise exception 'slot_closed';
   end if;
 
@@ -340,7 +348,15 @@ begin
          and (b.status in ('confirmed', 'completed')
               or (b.status = 'pending_payment' and b.hold_expires_at > now()))
     ) o on true
-   where s.booking_date = p_date and s.is_open
+   where s.booking_date = p_date
+     and s.is_open
+     and (
+       s.booking_date > (now() at time zone 'Asia/Bangkok')::date
+       or (
+         s.booking_date = (now() at time zone 'Asia/Bangkok')::date
+         and s.start_time > (now() at time zone 'Asia/Bangkok')::time
+       )
+     )
    order by s.start_time;
 end;
 $$;

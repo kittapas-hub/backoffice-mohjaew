@@ -21,6 +21,8 @@ const MESSAGES: Record<CreateBookingError, string> = {
   slot_closed: "รอบเวลานี้ปิดรับจองแล้ว",
   slot_full: "รอบเวลานี้เต็มแล้ว กรุณาเลือกรอบอื่น",
   duplicate_booking: "เบอร์นี้มีการจองในรอบนี้อยู่แล้ว ไม่สามารถจองซ้ำได้",
+  face_token_expired: "รูปหน้าหมดอายุ กรุณาเลือกรูปใหม่อีกครั้ง",
+  face_token_invalid: "ข้อมูลรูปหน้าไม่ถูกต้อง กรุณาเลือกรูปใหม่อีกครั้ง",
   server_error: "เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง",
 };
 
@@ -31,6 +33,8 @@ const STATUS_CODE: Record<CreateBookingError, number> = {
   slot_closed: 409,
   slot_full: 409,
   duplicate_booking: 409,
+  face_token_expired: 409,
+  face_token_invalid: 400,
   server_error: 500,
 };
 
@@ -100,6 +104,10 @@ export async function POST(req: Request) {
     );
   }
 
+  // Validate faceUploadToken: must be a UUID (client supplies opaque token, not path).
+  const rawFaceToken = String(body.faceUploadToken ?? "");
+  const faceUploadToken = UUID_RE.test(rawFaceToken) ? rawFaceToken : undefined;
+
   // Only whitelisted fields reach the core; status/queue/hold/capacity are
   // always set server-side by create_booking — never from the client.
   const result = await createSlotBooking(
@@ -111,7 +119,7 @@ export async function POST(req: Request) {
       consultationTopic: String(body.consultationTopic ?? ""),
       birthDateText: String(body.birthDateText ?? ""),
     },
-    { idempotencyKey },
+    { idempotencyKey, faceUploadToken },
   );
 
   if (!result.ok) {

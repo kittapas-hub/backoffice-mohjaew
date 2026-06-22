@@ -70,6 +70,12 @@ export default async function DayView({
         .order("queue_number")
     : { data: [] as Booking[] };
 
+  const bookingIds = (bookings ?? []).map((b) => b.id);
+  const { data: faceRows } = bookingIds.length
+    ? await db.from("booking_images").select("booking_id").in("booking_id", bookingIds)
+    : { data: null };
+  const faceSet = new Set((faceRows ?? []).map((r) => r.booking_id as string));
+
   const bySlot = new Map<string, Booking[]>();
   for (const b of (bookings ?? []) as Booking[]) {
     const list = bySlot.get(b.slot_id) ?? [];
@@ -81,9 +87,19 @@ export default async function DayView({
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold">ตารางคิวรายวัน</h1>
-        <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-900">
-          ← รายการจองทั้งหมด
-        </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          {slots && slots.length > 0 && (
+            <form action={seedDaySlots}>
+              <input type="hidden" name="date" value={date} />
+              <button className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
+                เติมรอบรายชั่วโมง
+              </button>
+            </form>
+          )}
+          <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-900">
+            ← รายการจองทั้งหมด
+          </Link>
+        </div>
       </div>
 
       {confirmError && (
@@ -110,7 +126,7 @@ export default async function DayView({
           <form action={seedDaySlots}>
             <input type="hidden" name="date" value={date} />
             <button className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white">
-              สร้างรอบมาตรฐาน (เช้า/บ่าย/เย็น)
+              สร้างรอบรายชั่วโมง (09:00–21:00)
             </button>
           </form>
         </div>
@@ -173,6 +189,7 @@ export default async function DayView({
                       <th className="px-4 py-2">หัวข้อ</th>
                       <th className="px-4 py-2">ช่องทาง</th>
                       <th className="px-4 py-2">สถานะ</th>
+                      <th className="px-4 py-2">รูป</th>
                       <th className="px-4 py-2"></th>
                     </tr>
                   </thead>
@@ -186,6 +203,9 @@ export default async function DayView({
                         <td className="px-4 py-2">{b.source ?? "-"}</td>
                         <td className="px-4 py-2">
                           <StatusBadge status={b.status} />
+                        </td>
+                        <td className="px-4 py-2 text-center" title={faceSet.has(b.id) ? "มีรูปหน้า" : "ไม่มีรูป"}>
+                          {faceSet.has(b.id) ? "📷" : ""}
                         </td>
                         <td className="px-4 py-2">
                           <div className="flex gap-1">

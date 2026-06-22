@@ -110,6 +110,9 @@ export type ValidatedInput = Omit<BookingInput, "source"> & {
   source: BookingSource;
 };
 
+export const PAYMENT_HOLD_MINUTES = 10;
+export const DEFAULT_CONSULTATION_TOPIC = "ไม่ได้ระบุหัวข้อพิเศษ";
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -121,12 +124,13 @@ export function validateBookingInput(
   const slotId = String(raw.slotId ?? "").trim();
   const nickname = String(raw.nickname ?? "").trim();
   const phone = String(raw.phone ?? "").trim();
-  const consultationTopic = String(raw.consultationTopic ?? "").trim();
+  const consultationTopic =
+    String(raw.consultationTopic ?? "").trim() || DEFAULT_CONSULTATION_TOPIC;
   const birthDateText = String(raw.birthDateText ?? "").trim();
 
   if (!isAllowedSource(raw.source)) return { ok: false, error: "invalid_source" };
   if (!UUID_RE.test(slotId)) return { ok: false, error: "invalid_input" };
-  if (!nickname || !consultationTopic || !birthDateText) {
+  if (!nickname || !birthDateText) {
     return { ok: false, error: "invalid_input" };
   }
   // Phone: 9–15 digits after stripping common separators.

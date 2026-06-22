@@ -1,4 +1,4 @@
-import { isAllowedSource } from "@/lib/slots";
+import { isAllowedSource, PAYMENT_HOLD_MINUTES } from "@/lib/slots";
 import BookingForm from "./BookingForm";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export default async function BookingPage({
           <p className="booking-eyebrow">Mohjaew Booking</p>
           <h1 className="booking-title">จองคิวปรึกษาหมอแจว</h1>
           <p className="booking-subtitle">
-            เลือกวันและรอบเวลาที่สะดวก จากนั้นกรอกข้อมูลเพื่อถือคิวไว้ 60 นาที
+            เลือกวันและรอบเวลาที่สะดวก จากนั้นกรอกข้อมูลเพื่อถือคิวไว้ {PAYMENT_HOLD_MINUTES} นาที
             ระหว่างรอการชำระเงิน
           </p>
         </header>

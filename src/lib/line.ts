@@ -73,6 +73,39 @@ export async function notifyTeamSafe(
   }
 }
 
+// Non-fatal image push to the team group. Returns skipped when LINE env is absent.
+export async function notifyTeamImageSafe(
+  imageUrl: string,
+): Promise<{ ok: boolean; skipped?: boolean }> {
+  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const groupId = process.env.LINE_BOOKING_NOTIFY_GROUP_ID;
+  if (!token || !groupId) return { ok: false, skipped: true };
+  try {
+    const res = await fetch(`${API}/message/push`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: groupId,
+        messages: [
+          {
+            type: "image",
+            originalContentUrl: imageUrl,
+            previewImageUrl: imageUrl,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      console.error("[line] image notify failed", res.status, await res.text());
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error("[line] image notify error", err);
+    return { ok: false };
+  }
+}
+
 export async function getUserDisplayName(userId: string): Promise<string | null> {
   const res = await fetch(`${API}/profile/${userId}`, { headers: authHeaders() });
   if (!res.ok) return null;

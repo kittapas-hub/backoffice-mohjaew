@@ -44,6 +44,8 @@ const core = readFileSync(
   "utf8",
 );
 assert.match(core, /rpc\(\s*["'`]create_booking["'`]/, "core must create via create_booking RPC");
+assert.match(core, /PAYMENT_HOLD_MINUTES/, "core must use the shared payment hold duration");
+assert.match(core, /p_hold_minutes:\s*PAYMENT_HOLD_MINUTES/, "core must pass hold minutes explicitly");
 
 // --- 2. Cron expire endpoint must require CRON_SECRET ------------------------
 const cron = readFileSync(join(appDir, "api/cron/expire-bookings/route.ts"), "utf8");
@@ -87,6 +89,13 @@ assert.doesNotMatch(migration, /security definer/i, "no SECURITY DEFINER expecte
 assert.match(migration, /idempotency_key/, "bookings must have idempotency_key");
 assert.match(migration, /duplicate_booking/, "create_booking must guard duplicates");
 assert.match(migration, /create table if not exists public\.api_rate_limits/, "rate-limit table");
+assert.match(migration, /Asia\/Bangkok/, "slot cut-off must use Thailand time");
+assert.match(migration, /v_slot\.start_time\s*<=/, "create_booking must reject slots that already started");
+assert.match(migration, /s\.start_time\s*>/, "get_open_slots must hide slots that already started");
+const faceMigration = read("../supabase/migrations/0003_face_upload.sql");
+assert.match(faceMigration, /p_hold_minutes\s+int\s+default\s+10/, "0003 create_booking must keep 10-minute payment hold");
+assert.match(faceMigration, /Asia\/Bangkok/, "0003 create_booking must keep Thailand-time slot cut-off");
+assert.match(faceMigration, /v_slot\.start_time\s*<=/, "0003 create_booking must reject slots that already started");
 
 // --- 4. Admin slot bookings only transition via the RPC ---------------------
 const adminActions = read("app/admin/actions.ts");
@@ -104,6 +113,10 @@ assert.doesNotMatch(
   /from\(\s*["'`]bookings["'`]\s*\)/,
   "day actions must not update the bookings table directly",
 );
+assert.match(dayActions, /DEFAULT_HOURLY_SLOTS/, "default slots must be hourly units");
+assert.match(dayActions, /length:\s*12/, "default day should seed 12 hourly slots");
+assert.match(dayActions, /capacity:\s*1/, "default hourly slot capacity should be 1");
+assert.doesNotMatch(dayActions, /09:00["'`],\s*end_time:\s*["'`]12:00/, "must not seed legacy 3-hour morning slot");
 
 // --- 5. POST /api/bookings guards -------------------------------------------
 const bookingsRoute = read("app/api/bookings/route.ts");
@@ -180,5 +193,81 @@ assert.doesNotMatch(
   /booking\/success[^`'"]*(?:ref=|&q=|&date=|&slot=|&exp=)/,
   "BookingForm must not put individual booking fields in the success URL",
 );
+
+// --- 8. Face upload + LINE image notify (upload-token flow) ------------------
+
+// face-upload returns only { uploadToken } — never storagePath or a signed URL.
+const faceUpload = read("app/api/bookings/face-upload/route.ts");
+assert.match(faceUpload, /ALLOWED_TYPES/, "face-upload must define allowed MIME types");
+assert.match(faceUpload, /MAX_BYTES/, "face-upload must enforce max file size");
+assert.match(faceUpload, /supabaseAdmin/, "face-upload must use supabaseAdmin (service role)");
+assert.match(faceUpload, /uploadToken/, "face-upload must return uploadToken");
+assert.doesNotMatch(faceUpload, /createSignedUrl/, "face-upload must not create signed URLs");
+
+// Honeypot + idempotency key guard on face-upload.
+assert.match(faceUpload, /company/, "face-upload must check honeypot field");
+assert.match(faceUpload, /[Ii]dempotency.?[Kk]ey/, "face-upload must require idempotency key");
+
+// Rate limit must use the shared secret (never silently disabled).
+assert.match(faceUpload, /BOOKING_RATE_LIMIT_SECRET/, "face-upload must use BOOKING_RATE_LIMIT_SECRET");
+assert.match(faceUpload, /recordRateHit/, "face-upload must call recordRateHit");
+
+// bookings route must read faceUploadToken (not facePath) and map face error codes.
+assert.match(bookingsRoute, /faceUploadToken/, "bookings route must read faceUploadToken");
+assert.doesNotMatch(bookingsRoute, /facePath/, "bookings route must not read facePath");
+assert.match(bookingsRoute, /face_token_expired/, "bookings route must map face_token_expired");
+assert.match(bookingsRoute, /face_token_invalid/, "bookings route must map face_token_invalid");
+
+// booking-core must pass p_face_upload_token to RPC and handle face error codes.
+assert.match(coreSrc, /p_face_upload_token/, "booking-core must pass p_face_upload_token to RPC");
+assert.match(coreSrc, /face_token_expired/, "booking-core KNOWN_ERRORS must include face_token_expired");
+assert.match(coreSrc, /face_token_invalid/, "booking-core KNOWN_ERRORS must include face_token_invalid");
+// linkFaceToBooking was removed in P0 hardening (logic moved into RPC + inline).
+assert.doesNotMatch(coreSrc, /linkFaceToBooking/, "booking-core must not export linkFaceToBooking");
+
+// LINE image notify is non-fatal: failure is caught and booking is never blocked.
+assert.match(coreSrc, /notifyTeamImageSafe/, "booking-core must call notifyTeamImageSafe");
+assert.match(coreSrc, /imgResult\.ok/, "booking-core must handle image notify failure non-fatally");
+
+// ไม่ส่งวันเกิดเข้า group — birthDateText must not appear in the group text body.
+const notifyFnStart = coreSrc.indexOf("async function sendTeamNotify");
+const notifyFnBody = coreSrc.slice(notifyFnStart, coreSrc.indexOf("\nexport ", notifyFnStart + 1));
+assert.doesNotMatch(notifyFnBody, /birthDateText/, "sendTeamNotify must not include birthDateText in group message");
+
+// 0003 migration must define booking_face_uploads and the face token error codes.
+const migration3 = read("../supabase/migrations/0003_face_upload.sql");
+assert.match(migration3, /booking_face_uploads/, "0003 must create booking_face_uploads table");
+assert.match(migration3, /face_token_expired/, "0003 RPC must raise face_token_expired");
+assert.match(migration3, /face_token_invalid/, "0003 RPC must raise face_token_invalid");
+
+// Cron must run orphan cleanup: expired pending → cleaning → (storage delete) → deleted.
+const cronRoute = read("app/api/cron/expire-bookings/route.ts");
+assert.match(cronRoute, /cleaning/, "cron must transition orphan uploads to 'cleaning'");
+assert.match(cronRoute, /deleted/, "cron must mark cleaned uploads as 'deleted'");
+
+// notifyTeamImageSafe must exist in line.ts.
+const lineSrc = read("lib/line.ts");
+assert.match(lineSrc, /notifyTeamImageSafe/, "line.ts must export notifyTeamImageSafe");
+
+// BookingForm must send faceUploadToken (not facePath) and handle face token errors.
+assert.match(bookingForm, /faceFile/, "BookingForm must track faceFile state");
+assert.match(bookingForm, /face-upload/, "BookingForm must call face-upload endpoint");
+assert.match(bookingForm, /faceUploadToken/, "BookingForm must send faceUploadToken to bookings endpoint");
+assert.doesNotMatch(bookingForm, /facePath/, "BookingForm must not send facePath");
+assert.match(bookingForm, /face_token_expired/, "BookingForm must handle face_token_expired");
+
+// No migration sets booking-faces bucket to public.
+for (const mig of [
+  "../supabase/migrations/0001_init.sql",
+  "../supabase/migrations/0002_booking_slots.sql",
+  "../supabase/migrations/0003_face_upload.sql",
+]) {
+  const migSrc = read(mig);
+  assert.doesNotMatch(
+    migSrc,
+    /booking.faces.*public.*true|public.*true.*booking.faces/,
+    `${mig} must not set booking-faces bucket to public`,
+  );
+}
 
 console.log("integration-guards self-check passed");

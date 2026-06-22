@@ -6,6 +6,7 @@
 // see the staging checklist in README for the concurrent-load verification.
 import assert from "node:assert";
 import {
+  DEFAULT_CONSULTATION_TOPIC,
   isAllowedSource,
   occupies,
   countOccupied,
@@ -162,6 +163,19 @@ const ok = validateBookingInput({
 });
 assert.equal(ok.ok, true);
 if (ok.ok) assert.equal(ok.value.phone, "0812345678");
+
+const okWithoutSpecialTopic = validateBookingInput({
+  slotId: goodUuid,
+  source: "website",
+  nickname: "มะลิ",
+  phone: "081-234-5678",
+  consultationTopic: "",
+  birthDateText: "1 ม.ค. 2540",
+});
+assert.equal(okWithoutSpecialTopic.ok, true);
+if (okWithoutSpecialTopic.ok) {
+  assert.equal(okWithoutSpecialTopic.value.consultationTopic, DEFAULT_CONSULTATION_TOPIC);
+}
 
 // bad source
 assert.deepEqual(

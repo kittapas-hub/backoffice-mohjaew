@@ -4,8 +4,12 @@
 // this layer validates input, maps errors, and fires the team notification.
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
-import { notifyTeamSafe } from "@/lib/line";
-import { validateBookingInput, type BookingInput } from "@/lib/slots";
+import { notifyTeamSafe, notifyTeamImageSafe } from "@/lib/line";
+import {
+  PAYMENT_HOLD_MINUTES,
+  validateBookingInput,
+  type BookingInput,
+} from "@/lib/slots";
 
 export type CreateBookingError =
   | "invalid_input"
@@ -14,6 +18,8 @@ export type CreateBookingError =
   | "slot_closed"
   | "slot_full"
   | "duplicate_booking"
+  | "face_token_expired"
+  | "face_token_invalid"
   | "server_error";
 
 export type CreatedBooking = {
@@ -36,6 +42,8 @@ const KNOWN_ERRORS: CreateBookingError[] = [
   "slot_closed",
   "slot_full",
   "duplicate_booking",
+  "face_token_expired",
+  "face_token_invalid",
 ];
 
 const UUID_RE =
@@ -43,7 +51,7 @@ const UUID_RE =
 
 export async function createSlotBooking(
   raw: Partial<BookingInput>,
-  opts: { idempotencyKey: string },
+  opts: { idempotencyKey: string; faceUploadToken?: string },
 ): Promise<
   { ok: true; booking: CreatedBooking } | { ok: false; error: CreateBookingError }
 > {
@@ -62,7 +70,9 @@ export async function createSlotBooking(
     p_phone: v.phone,
     p_consultation_topic: v.consultationTopic,
     p_birth_date_text: v.birthDateText,
+    p_hold_minutes: PAYMENT_HOLD_MINUTES,
     p_idempotency_key: opts.idempotencyKey,
+    p_face_upload_token: opts.faceUploadToken ?? null,
   });
 
   if (error) {
@@ -74,13 +84,31 @@ export async function createSlotBooking(
 
   const booking = (Array.isArray(data) ? data[0] : data) as CreatedBooking;
 
+  // Face was claimed atomically in the RPC. Fetch its storage path from
+  // booking_images and create a 24-hour signed URL for the LINE image message.
+  // Non-fatal: a null here means LINE gets text-only; admin can still view.
+  let faceSignedUrl: string | null = null;
+  if (opts.faceUploadToken) {
+    const { data: imgRow } = await db
+      .from("booking_images")
+      .select("storage_path")
+      .eq("booking_id", booking.id)
+      .maybeSingle();
+    if (imgRow) {
+      const { data: signed } = await db.storage
+        .from("booking-faces")
+        .createSignedUrl(imgRow.storage_path, 86_400); // 24 h
+      faceSignedUrl = signed?.signedUrl ?? null;
+    }
+  }
+
   // Fire-and-await team notify (non-fatal — must never block the booking).
-  await sendTeamNotify(booking, v.birthDateText);
+  await sendTeamNotify(booking, faceSignedUrl);
 
   return { ok: true, booking };
 }
 
-async function sendTeamNotify(b: CreatedBooking, birthDateText: string) {
+async function sendTeamNotify(b: CreatedBooking, faceSignedUrl: string | null) {
   const base = APP_URL || "";
   const link = base ? `${base}/admin/bookings/${b.id}` : `/admin/bookings/${b.id}`;
   const text = [
@@ -91,13 +119,23 @@ async function sendTeamNotify(b: CreatedBooking, birthDateText: string) {
     `ชื่อ: ${b.nickname}`,
     `โทร: ${b.phone}`,
     `หัวข้อ: ${b.consultation_topic}`,
-    `วันเกิด: ${birthDateText}`,
     `ช่องทาง: ${b.source}`,
-    "สถานะ: รอชำระเงิน (hold 60 นาที)",
+    faceSignedUrl ? "📷 รูปหน้า: แนบมาแล้ว (รูปส่งต่อด้านล่าง)" : "📷 รูปหน้า: ไม่มี",
+    `สถานะ: รอชำระเงิน (hold ${PAYMENT_HOLD_MINUTES} นาที)`,
     `Backoffice: ${link}`,
   ].join("\n");
-  await notifyTeamSafe(text);
+  const textResult = await notifyTeamSafe(text);
+  if (textResult.skipped || !faceSignedUrl) return;
+
+  const imgResult = await notifyTeamImageSafe(faceSignedUrl);
+  if (!imgResult.ok) {
+    console.error("[booking] LINE image notify failed for booking", b.id);
+    await notifyTeamSafe(
+      `⚠️ ไม่สามารถส่งรูปหน้าอัตโนมัติ โปรดเปิดดูรูปจาก Backoffice: ${link}`,
+    );
+  }
 }
+
 
 export type BookingTokenData = {
   reference: string;       // first 8 chars of id, uppercase (display only)
