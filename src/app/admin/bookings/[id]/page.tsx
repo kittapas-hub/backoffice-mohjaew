@@ -2,18 +2,36 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { updateStatus } from "../../actions";
-import { STATUSES, STATUS_LABEL, StatusBadge } from "../../status";
+import { updateStatus, transitionSlotBooking } from "../../actions";
+import { STATUS_LABEL, StatusBadge } from "../../status";
+import { SLOT_TRANSITIONS } from "@/lib/slots";
+import { TRANSITION_ERROR_TH, type TransitionErrorCode } from "@/lib/confirm-error";
+
+// Legacy/manual (non-slot) bookings can be set to these directly.
+const LEGACY_STATUSES = ["pending", "contacted", "confirmed", "cancelled"] as const;
+const TRANSITION_LABEL: Record<string, string> = {
+  confirmed: "ยืนยัน",
+  completed: "เสร็จสิ้น",
+  cancelled: "ยกเลิก",
+  expired: "หมดเวลา",
+};
 
 export const dynamic = "force-dynamic";
 
 export default async function BookingDetail({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ error?: string }>;
 }) {
   await requireAdmin();
   const { id } = await params;
+  const { error: errorParam } = await searchParams;
+  const confirmError =
+    errorParam && errorParam in TRANSITION_ERROR_TH
+      ? TRANSITION_ERROR_TH[errorParam as TransitionErrorCode]
+      : null;
 
   const db = supabaseAdmin();
   const { data: booking } = await db
@@ -47,6 +65,12 @@ export default async function BookingDetail({
         <h1 className="text-xl font-bold">{booking.nickname}</h1>
         <StatusBadge status={booking.status} />
       </div>
+
+      {confirmError && (
+        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {confirmError}
+        </div>
+      )}
 
       <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-4 rounded-lg border border-gray-200 bg-white p-6 sm:grid-cols-2">
         <Field label="ชื่อเล่น" value={booking.nickname} />
@@ -82,23 +106,52 @@ export default async function BookingDetail({
 
       <section className="mt-6">
         <h2 className="mb-2 font-semibold">เปลี่ยนสถานะ</h2>
-        <form action={updateStatus} className="flex items-center gap-3">
-          <input type="hidden" name="id" value={booking.id} />
-          <select
-            name="status"
-            defaultValue={booking.status}
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-          >
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {STATUS_LABEL[s]}
-              </option>
+        {booking.slot_id ? (
+          // Slot booking: only valid transitions, via the state machine.
+          <div className="flex flex-wrap gap-2">
+            {(SLOT_TRANSITIONS[booking.status] ?? []).map((to) => (
+              <form key={to} action={transitionSlotBooking}>
+                <input type="hidden" name="bookingId" value={booking.id} />
+                <input type="hidden" name="to" value={to} />
+                <input
+                  type="hidden"
+                  name="redirectTo"
+                  value={`/admin/bookings/${booking.id}`}
+                />
+                <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50">
+                  {TRANSITION_LABEL[to] ?? to}
+                </button>
+              </form>
             ))}
-          </select>
-          <button className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white">
-            บันทึก
-          </button>
-        </form>
+            {(SLOT_TRANSITIONS[booking.status] ?? []).length === 0 && (
+              <p className="text-sm text-gray-400">สถานะนี้สิ้นสุดแล้ว</p>
+            )}
+          </div>
+        ) : (
+          // Legacy/manual booking (no slot).
+          <div>
+            <p className="mb-2 text-xs text-amber-700">
+              รายการนี้เป็นการจองแบบเดิม (ไม่ผูกกับรอบเวลา)
+            </p>
+            <form action={updateStatus} className="flex items-center gap-3">
+              <input type="hidden" name="id" value={booking.id} />
+              <select
+                name="status"
+                defaultValue={booking.status}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              >
+                {LEGACY_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {STATUS_LABEL[s]}
+                  </option>
+                ))}
+              </select>
+              <button className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white">
+                บันทึก
+              </button>
+            </form>
+          </div>
+        )}
       </section>
     </div>
   );

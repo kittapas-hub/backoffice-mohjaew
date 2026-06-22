@@ -28,11 +28,19 @@ export default async function AdminHome({
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-bold">รายการจองคิว</h1>
-        <form action={signOut}>
-          <button className="text-sm text-gray-500 hover:text-gray-900">
-            ออกจากระบบ
-          </button>
-        </form>
+        <div className="flex items-center gap-4">
+          <Link
+            href="/admin/day"
+            className="text-sm font-medium text-rose-600 hover:underline"
+          >
+            ตารางคิวรายวัน
+          </Link>
+          <form action={signOut}>
+            <button className="text-sm text-gray-500 hover:text-gray-900">
+              ออกจากระบบ
+            </button>
+          </form>
+        </div>
       </div>
 
       <div className="mb-4 flex flex-wrap gap-2">

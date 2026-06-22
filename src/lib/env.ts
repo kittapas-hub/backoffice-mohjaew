@@ -29,6 +29,12 @@ export const serverEnv = {
   get notifyGroupId() {
     return required("LINE_BOOKING_NOTIFY_GROUP_ID");
   },
+  // Used to HMAC the client IP for DB-backed rate limiting. Required when
+  // POST /api/bookings is reachable (the route returns a 500 config error if
+  // it is missing rather than silently disabling the limit).
+  get rateLimitSecret() {
+    return required("BOOKING_RATE_LIMIT_SECRET");
+  },
 };
 
 export function adminEmails(): string[] {
