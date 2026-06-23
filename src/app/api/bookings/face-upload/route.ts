@@ -49,7 +49,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 4. Rate limit: 5 uploads / 15 min per hashed IP (same HMAC key as bookings).
+  const db = supabaseAdmin();
+
+  // 4. Idempotency: return the existing pending upload for this key WITHOUT
+  //    incrementing the rate limit. Retrying a lost network response with the
+  //    same key is free — only genuinely new upload attempts are counted.
+  const { data: existing } = await db
+    .from("booking_face_uploads")
+    .select("id")
+    .eq("idempotency_key", idempotencyKey)
+    .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+  if (existing) {
+    return NextResponse.json({ uploadToken: existing.id });
+  }
+
+  // 5. Rate limit: 5 new uploads / 15 min per hashed IP. Only reached when no
+  //    existing pending upload was found, so idempotent retries never count.
   const secret = process.env.BOOKING_RATE_LIMIT_SECRET;
   if (!secret) {
     console.error("[face-upload] BOOKING_RATE_LIMIT_SECRET not configured");
@@ -68,19 +85,6 @@ export async function POST(req: NextRequest) {
       { error: "rate_limited", message: "คุณอัปโหลดรูปบ่อยเกินไป กรุณาลองใหม่ภายหลัง" },
       { status: 429 },
     );
-  }
-
-  // 5. Idempotency: return existing pending upload for this key (no new file).
-  const db = supabaseAdmin();
-  const { data: existing } = await db
-    .from("booking_face_uploads")
-    .select("id")
-    .eq("idempotency_key", idempotencyKey)
-    .eq("status", "pending")
-    .gt("expires_at", new Date().toISOString())
-    .maybeSingle();
-  if (existing) {
-    return NextResponse.json({ uploadToken: existing.id });
   }
 
   // 6. Validate file type and size.
@@ -120,7 +124,7 @@ export async function POST(req: NextRequest) {
   });
 
   if (insertErr) {
-    // Concurrent request with same key may have just won; re-check.
+    // Concurrent request with same key may have just won the insert race; re-check.
     if (insertErr.code === "23505") {
       const { data: raceWinner } = await db
         .from("booking_face_uploads")
@@ -142,7 +146,7 @@ export async function POST(req: NextRequest) {
     .upload(storagePath, buffer, { contentType: file.type, upsert: false });
 
   if (storageErr) {
-    // Rollback the intent row so the slot is not permanently blocked.
+    // Rollback the intent row so the idempotency key slot is freed.
     await db.from("booking_face_uploads").delete().eq("id", uploadToken);
     console.error("[face-upload] storage upload failed", storageErr);
     return NextResponse.json(

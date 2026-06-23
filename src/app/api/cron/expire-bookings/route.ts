@@ -29,35 +29,57 @@ export async function GET(req: Request) {
   }
 
   // Orphan face-upload cleanup ------------------------------------------------
-  // Mark expired pending intents as 'cleaning' atomically. The FOR UPDATE lock
-  // inside create_booking's face claim serializes against this UPDATE, so a row
-  // being claimed right now will have status='claimed' and be skipped by the
-  // WHERE status='pending' predicate.
-  const now = new Date().toISOString();
-  await db
-    .from("booking_face_uploads")
-    .update({ status: "cleaning" })
-    .eq("status", "pending")
-    .lt("expires_at", now);
+  // claim_expired_face_uploads_for_cleanup uses FOR UPDATE SKIP LOCKED to
+  // atomically assign a cleanup_token lease to each row. Two concurrent cron
+  // runs cannot claim the same row; one will simply get fewer (or zero) rows.
+  const { data: claimed, error: claimErr } = await db.rpc(
+    "claim_expired_face_uploads_for_cleanup",
+    { p_batch_size: 25 },
+  );
+  if (claimErr) {
+    console.error("[cron] claim_expired_face_uploads_for_cleanup failed", claimErr);
+    // Return partial success rather than 500 — bookings expiry already ran.
+    return NextResponse.json({ expired: data ?? 0, cleanedFaces: 0, claimError: true });
+  }
 
-  // Process all rows in 'cleaning' (includes failures from prior cron runs).
-  const { data: toDelete } = await db
-    .from("booking_face_uploads")
-    .select("id, storage_path")
-    .eq("status", "cleaning");
-
+  type ClaimedRow = { id: string; storage_path: string; cleanup_token: string };
   let cleanedFaces = 0;
-  for (const row of toDelete ?? []) {
+
+  for (const row of (claimed ?? []) as ClaimedRow[]) {
     const { error: storageErr } = await db.storage
       .from("booking-faces")
       .remove([row.storage_path]);
-    if (storageErr) {
-      // Leave as 'cleaning' so the next cron run retries the storage delete.
+
+    // Treat "object not found" as success: it was already deleted.
+    const alreadyGone =
+      !storageErr ||
+      storageErr.message?.toLowerCase().includes("not found") ||
+      (storageErr as { statusCode?: string | number }).statusCode === 404 ||
+      (storageErr as { statusCode?: string | number }).statusCode === "404";
+
+    if (alreadyGone) {
+      // Token-verified mark-deleted: only succeeds if this run still owns the lease.
+      // If Cron B re-claimed the row (new token), this call is a safe no-op.
+      const { error: markErr } = await db.rpc("complete_face_upload_cleanup", {
+        p_id: row.id,
+        p_cleanup_token: row.cleanup_token,
+      });
+      if (markErr) {
+        console.error("[cron] complete_face_upload_cleanup failed", row.id, markErr);
+      } else {
+        cleanedFaces++;
+      }
+    } else {
+      // Real storage failure — record error on our own lease row and let the
+      // lease expire so the next cron run retries with a fresh token.
       console.error("[cron] face storage delete failed, will retry", row.storage_path, storageErr);
-      continue;
+      await db
+        .from("booking_face_uploads")
+        .update({ cleanup_last_error: String(storageErr!.message).slice(0, 500) })
+        .eq("id", row.id)
+        .eq("cleanup_token", row.cleanup_token) // guard: only touch our own lease
+        .eq("status", "cleaning");
     }
-    await db.from("booking_face_uploads").update({ status: "deleted" }).eq("id", row.id);
-    cleanedFaces++;
   }
 
   return NextResponse.json({ expired: data ?? 0, cleanedFaces });
