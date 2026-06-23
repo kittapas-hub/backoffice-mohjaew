@@ -6,6 +6,8 @@ import { updateStatus, transitionSlotBooking } from "../../actions";
 import { STATUS_LABEL, StatusBadge } from "../../status";
 import { SLOT_TRANSITIONS } from "@/lib/slots";
 import { TRANSITION_ERROR_TH, type TransitionErrorCode } from "@/lib/confirm-error";
+import { getPaymentOrdersForBooking } from "@/lib/payments/payment-orders";
+import type { PaymentOrder } from "@/lib/payments/types";
 
 // Legacy/manual (non-slot) bookings can be set to these directly.
 const LEGACY_STATUSES = ["pending", "contacted", "confirmed", "cancelled"] as const;
@@ -41,10 +43,10 @@ export default async function BookingDetail({
     .maybeSingle();
   if (!booking) notFound();
 
-  const { data: images } = await db
-    .from("booking_images")
-    .select("storage_path")
-    .eq("booking_id", id);
+  const [{ data: images }, paymentOrders] = await Promise.all([
+    db.from("booking_images").select("storage_path").eq("booking_id", id),
+    getPaymentOrdersForBooking(id),
+  ]);
 
   // Short-lived signed URLs for the private bucket (5 minutes).
   const signedUrls: string[] = [];
@@ -54,6 +56,8 @@ export default async function BookingDetail({
       .createSignedUrl(img.storage_path, 300);
     if (data?.signedUrl) signedUrls.push(data.signedUrl);
   }
+
+  const latestOrder: PaymentOrder | undefined = paymentOrders[0];
 
   return (
     <div className="max-w-2xl">
@@ -84,6 +88,54 @@ export default async function BookingDetail({
           value={new Date(booking.created_at).toLocaleString("th-TH")}
         />
       </dl>
+
+      {latestOrder && (
+        <section className="mt-6">
+          <h2 className="mb-2 font-semibold">ข้อมูลการชำระเงิน</h2>
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-4 rounded-lg border border-gray-200 bg-white p-6 sm:grid-cols-2">
+            <Field
+              label="สถานะชำระเงิน"
+              value={
+                latestOrder.status === "manual_review"
+                  ? "⚠️ ต้องตรวจสอบด้วยตนเอง"
+                  : latestOrder.status === "paid"
+                    ? "✅ ชำระแล้ว"
+                    : latestOrder.status
+              }
+            />
+            <Field
+              label="จำนวนเงิน"
+              value={`${(latestOrder.amount_satang / 100).toLocaleString("th-TH")} บาท`}
+            />
+            <Field label="ช่องทางชำระ" value={latestOrder.provider} />
+            <Field
+              label="สร้างออเดอร์"
+              value={new Date(latestOrder.created_at).toLocaleString("th-TH")}
+            />
+            <Field
+              label="หมดอายุ"
+              value={new Date(latestOrder.expires_at).toLocaleString("th-TH")}
+            />
+            {latestOrder.paid_at && (
+              <Field
+                label="ชำระเมื่อ"
+                value={new Date(latestOrder.paid_at).toLocaleString("th-TH")}
+              />
+            )}
+            {latestOrder.amount_received_satang != null && (
+              <Field
+                label="รับจริง"
+                value={`${(latestOrder.amount_received_satang / 100).toLocaleString("th-TH")} บาท`}
+              />
+            )}
+          </dl>
+          {latestOrder.status === "manual_review" && (
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              ⚠️ ออเดอร์นี้ต้องได้รับการตรวจสอบด้วยตนเอง (ยอดไม่ตรง หรือจองหมดอายุก่อนรับเงิน)
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="mt-6">
         <h2 className="mb-2 font-semibold">รูปหน้าตรง</h2>

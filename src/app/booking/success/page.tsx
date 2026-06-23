@@ -11,10 +11,15 @@ const STATUS_INFO: Record<
   string,
   { icon: string; title: string; body: string }
 > = {
+  booked: {
+    icon: "✅",
+    title: "ชำระเงินแล้ว รอยืนยัน",
+    body: "ทีมงานจะตรวจสอบและยืนยันคิวของคุณเร็วๆ นี้",
+  },
   confirmed: {
     icon: "✅",
     title: "ยืนยันการจองแล้ว",
-    body: "ทีมงานได้ยืนยันคิวของคุณแล้ว ไม่จำเป็นต้องชำระอีก",
+    body: "ทีมงานได้ยืนยันคิวของคุณแล้ว",
   },
   cancelled: {
     icon: "❌",

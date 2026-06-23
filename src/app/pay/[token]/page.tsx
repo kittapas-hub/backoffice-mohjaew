@@ -1,0 +1,189 @@
+// /pay/[token] — future payment checkout page.
+// 'token' is payment_orders.checkout_token (a UUID, non-guessable).
+//
+// SAFE: Does not accept money. Does not call any provider.
+// Does not expose customer PII (name, contact number, birth date, topic omitted).
+// Shows only non-sensitive booking/payment summary.
+//
+// When a real payment provider adapter is connected, this page will
+// display a checkout button or dynamic QR. Until then it shows a placeholder.
+import Link from "next/link";
+import { getPaymentOrderByCheckoutToken } from "@/lib/payments/payment-orders";
+import { supabaseAdmin } from "@/lib/supabase/admin";
+
+export const dynamic = "force-dynamic";
+
+function formatThaiDate(iso: string | null): string {
+  if (!iso) return "-";
+  try {
+    return new Date(iso + "T00:00:00Z").toLocaleDateString("th-TH", {
+      weekday: "short",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatThaiDateTime(iso: string | null): string {
+  if (!iso) return "-";
+  try {
+    return new Date(iso).toLocaleString("th-TH", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Asia/Bangkok",
+    }) + " น.";
+  } catch {
+    return iso;
+  }
+}
+
+export default async function PayPage({
+  params,
+}: {
+  params: Promise<{ token: string }>;
+}) {
+  const { token } = await params;
+
+  const order = await getPaymentOrderByCheckoutToken(token);
+
+  if (!order) {
+    return (
+      <Wrapper>
+        <div className="mb-4 text-4xl">🔍</div>
+        <h1 className="text-xl font-bold text-gray-700">ไม่พบรายการชำระเงิน</h1>
+        <p className="mt-2 text-sm text-gray-500">
+          ลิงก์อาจหมดอายุหรือไม่ถูกต้อง
+        </p>
+        <Link
+          href="/booking"
+          className="mt-6 inline-block rounded-xl bg-rose-600 px-6 py-2.5 text-sm font-semibold text-white"
+        >
+          จองคิวใหม่
+        </Link>
+      </Wrapper>
+    );
+  }
+
+  // Fetch non-PII booking summary (slot date and label only).
+  const db = supabaseAdmin();
+  const { data: bookingRow } = await db
+    .from("bookings")
+    .select("status, preferred_time, booking_slots(booking_date)")
+    .eq("id", order.booking_id)
+    .maybeSingle();
+
+  const slotRow = Array.isArray(bookingRow?.booking_slots)
+    ? bookingRow.booking_slots[0]
+    : bookingRow?.booking_slots;
+  const bookingDate = slotRow?.booking_date ?? null;
+
+  const isExpiredOrClosed =
+    order.status === "expired" ||
+    order.status === "failed" ||
+    bookingRow?.status === "expired" ||
+    bookingRow?.status === "cancelled";
+
+  // Payment truth: only the payment order proves money was received.
+  // Booking status (confirmed, completed) is about admin actions, not payment.
+  const isPaid = order.status === "paid";
+
+  const BOOKING_STATUS_LABEL: Record<string, string> = {
+    pending_payment: "รอชำระเงิน",
+    booked: "ชำระแล้ว รอทีมงานตรวจข้อมูล",
+    confirmed: "ทีมงานยืนยันคิวแล้ว",
+    completed: "ให้บริการเสร็จแล้ว",
+    expired: "หมดอายุ",
+    cancelled: "ยกเลิก",
+  };
+  const bookingStatusLabel =
+    (bookingRow?.status && BOOKING_STATUS_LABEL[bookingRow.status]) ?? "-";
+
+  return (
+    <main className="mx-auto min-h-screen max-w-md px-5 py-10">
+      <div className="mb-6 text-center">
+        <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-rose-100 text-3xl">
+          {isPaid ? "✅" : isExpiredOrClosed ? "⏰" : "💳"}
+        </div>
+        <h1 className="text-2xl font-bold text-rose-700">
+          {isPaid
+            ? "ชำระเงินแล้ว"
+            : isExpiredOrClosed
+              ? "รายการหมดอายุ"
+              : "ชำระเงิน"}
+        </h1>
+      </div>
+
+      <div className="mb-5 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+        <dl className="space-y-3">
+          <Row label="เลขอ้างอิง" value={order.id.slice(0, 8).toUpperCase()} />
+          <Row
+            label="จำนวนเงิน"
+            value={`${(order.amount_satang / 100).toLocaleString("th-TH")} บาท`}
+          />
+          <Row label="วันที่" value={formatThaiDate(bookingDate)} />
+          <Row label="รอบเวลา" value={bookingRow?.preferred_time ?? "-"} />
+          <Row label="สถานะการจอง" value={bookingStatusLabel} />
+          {!isPaid && !isExpiredOrClosed && (
+            <Row
+              label="หมดอายุ"
+              value={formatThaiDateTime(order.expires_at)}
+            />
+          )}
+        </dl>
+      </div>
+
+      {isPaid ? (
+        <div className="rounded-2xl border border-teal-100 bg-teal-50 p-5 text-center">
+          <p className="font-semibold text-teal-800">ชำระเงินสำเร็จแล้ว</p>
+          <p className="mt-1 text-sm text-teal-700">
+            ทีมงานจะยืนยันคิวของคุณเร็วๆ นี้
+          </p>
+        </div>
+      ) : isExpiredOrClosed ? (
+        <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5 text-center">
+          <p className="font-semibold text-gray-700">รายการนี้หมดอายุแล้ว</p>
+          <Link
+            href="/booking"
+            className="mt-4 inline-block text-sm text-rose-600 hover:underline"
+          >
+            จองคิวใหม่
+          </Link>
+        </div>
+      ) : (
+        // Placeholder: payment channel not yet connected.
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 text-center">
+          <p className="font-semibold text-amber-800">
+            กำลังเตรียมช่องทางชำระเงิน
+          </p>
+          <p className="mt-2 text-sm text-amber-700">
+            ระบบชำระเงินออนไลน์อยู่ระหว่างการเชื่อมต่อ
+            กรุณาชำระผ่านช่องทางปกติตามที่ได้รับแจ้ง
+          </p>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function Wrapper({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center px-5 py-12 text-center">
+      {children}
+    </main>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+      <dt className="shrink-0 text-sm text-gray-500">{label}</dt>
+      <dd className="ml-3 text-sm">{value}</dd>
+    </div>
+  );
+}

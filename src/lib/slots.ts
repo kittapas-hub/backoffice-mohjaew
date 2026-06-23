@@ -23,8 +23,9 @@ export type BookingLike = {
 };
 
 // Does this booking currently occupy a seat? Mirrors create_booking()'s count.
+// 'booked' = payment received; always occupies (like confirmed/completed).
 export function occupies(b: BookingLike, now: number = Date.now()): boolean {
-  if (b.status === "confirmed" || b.status === "completed") return true;
+  if (b.status === "confirmed" || b.status === "completed" || b.status === "booked") return true;
   if (b.status === "pending_payment" && b.hold_expires_at) {
     return new Date(b.hold_expires_at).getTime() > now;
   }
@@ -75,10 +76,12 @@ export function canConfirm(
 }
 
 // Allowed slot-booking state transitions. Mirrors transition_slot_booking()
-// in 0002_booking_slots.sql. Terminal states map to []. Used by the admin UI
-// to render only valid actions and by tests.
+// in 0005_payment_foundation.sql. Terminal states map to [].
+// Used by the admin UI to render only valid actions and by tests.
+// Note: pending_payment -> booked is NOT here; that path is payment-only.
 export const SLOT_TRANSITIONS: Record<string, string[]> = {
   pending_payment: ["confirmed", "cancelled", "expired"],
+  booked: ["confirmed", "cancelled"],
   confirmed: ["completed", "cancelled"],
   completed: [],
   cancelled: [],
