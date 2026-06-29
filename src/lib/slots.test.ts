@@ -118,6 +118,9 @@ assert.equal(canTransition("expired", "completed"), false, "expired is terminal"
 assert.equal(canTransition("cancelled", "confirmed"), false, "cancelled is terminal");
 assert.equal(canTransition("completed", "cancelled"), false, "completed is terminal");
 assert.equal(canTransition("pending_payment", "completed"), false, "must confirm first");
+// Payment confirm guards: double-confirm and terminal states must be blocked.
+assert.equal(canTransition("confirmed", "confirmed"), false, "already confirmed: idempotent re-confirm not allowed via transition");
+assert.equal(canTransition("expired", "confirmed"), false, "expired booking cannot be confirmed");
 
 // confirmed -> completed keeps occupancy (already occupied; no extra seat).
 {

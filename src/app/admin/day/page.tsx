@@ -6,6 +6,7 @@ import { TRANSITION_ERROR_TH, type TransitionErrorCode } from "@/lib/confirm-err
 import { StatusBadge } from "../status";
 import { transitionSlotBooking } from "../actions";
 import { seedDaySlots, updateSlotCapacity, toggleSlot } from "./actions";
+import { ConfirmPaymentButton } from "../_components/ConfirmPaymentButton";
 
 // Thai labels + button styling for each transition target.
 const TRANSITION_UI: Record<string, { label: string; primary?: boolean }> = {
@@ -41,10 +42,10 @@ type Booking = BookingLike & {
 export default async function DayView({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; error?: string }>;
+  searchParams: Promise<{ date?: string; error?: string; success?: string }>;
 }) {
   await requireAdmin();
-  const { date: dateParam, error: errorParam } = await searchParams;
+  const { date: dateParam, error: errorParam, success: successParam } = await searchParams;
   const date = dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : todayISO();
   const confirmError =
     errorParam && errorParam in TRANSITION_ERROR_TH
@@ -105,6 +106,11 @@ export default async function DayView({
       {confirmError && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {confirmError}
+        </div>
+      )}
+      {successParam === "payment_confirmed" && (
+        <div className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800">
+          ✅ ยืนยันชำระเงินและล็อกคิวเรียบร้อย
         </div>
       )}
 
@@ -211,26 +217,38 @@ export default async function DayView({
                           <div className="flex gap-1">
                             {(SLOT_TRANSITIONS[b.status] ?? [])
                               .filter((t) => t !== "expired")
-                              .map((to) => (
-                                <form key={to} action={transitionSlotBooking}>
-                                  <input type="hidden" name="bookingId" value={b.id} />
-                                  <input type="hidden" name="to" value={to} />
-                                  <input
-                                    type="hidden"
-                                    name="redirectTo"
-                                    value={`/admin/day?date=${date}`}
+                              .map((to) =>
+                                b.status === "pending_payment" && to === "confirmed" ? (
+                                  <ConfirmPaymentButton
+                                    key={to}
+                                    bookingId={b.id}
+                                    nickname={b.nickname}
+                                    phone={b.phone}
+                                    slotInfo={`${date} ${slot.label}`}
+                                    refCode={b.id.slice(0, 8).toUpperCase()}
+                                    redirectTo={`/admin/day?date=${date}`}
                                   />
-                                  <button
-                                    className={
-                                      TRANSITION_UI[to]?.primary
-                                        ? "rounded bg-green-600 px-2 py-1 text-xs text-white"
-                                        : "rounded border border-gray-300 px-2 py-1 text-xs"
-                                    }
-                                  >
-                                    {TRANSITION_UI[to]?.label ?? to}
-                                  </button>
-                                </form>
-                              ))}
+                                ) : (
+                                  <form key={to} action={transitionSlotBooking}>
+                                    <input type="hidden" name="bookingId" value={b.id} />
+                                    <input type="hidden" name="to" value={to} />
+                                    <input
+                                      type="hidden"
+                                      name="redirectTo"
+                                      value={`/admin/day?date=${date}`}
+                                    />
+                                    <button
+                                      className={
+                                        TRANSITION_UI[to]?.primary
+                                          ? "rounded bg-green-600 px-2 py-1 text-xs text-white"
+                                          : "rounded border border-gray-300 px-2 py-1 text-xs"
+                                      }
+                                    >
+                                      {TRANSITION_UI[to]?.label ?? to}
+                                    </button>
+                                  </form>
+                                ),
+                              )}
                           </div>
                         </td>
                       </tr>

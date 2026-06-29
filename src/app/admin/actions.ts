@@ -37,6 +37,47 @@ export async function transitionSlotBooking(formData: FormData) {
   redirect(redirectTo);
 }
 
+// Hardened action for manual payment confirmation only.
+// Target status is hardcoded server-side — the client never supplies it.
+// Rejects if the booking is not currently pending_payment (fast-fail before
+// the RPC, which enforces the same rule atomically with a row lock).
+export async function confirmPayment(formData: FormData) {
+  await requireAdmin();
+  const id = String(formData.get("bookingId") ?? "");
+  const redirectTo = String(formData.get("redirectTo") ?? "/admin");
+  if (!id) return;
+
+  const db = supabaseAdmin();
+
+  const { data: booking } = await db
+    .from("bookings")
+    .select("status")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (booking?.status !== "pending_payment") {
+    const sep = redirectTo.includes("?") ? "&" : "?";
+    redirect(`${redirectTo}${sep}error=invalid_transition`);
+  }
+
+  const { error } = await db.rpc("transition_slot_booking", {
+    p_booking_id: id,
+    p_to: "confirmed", // never from client
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/day");
+  revalidatePath(`/admin/bookings/${id}`);
+
+  if (error) {
+    console.error("confirmPayment failed", error.message);
+    const sep = redirectTo.includes("?") ? "&" : "?";
+    redirect(`${redirectTo}${sep}error=${mapTransitionError(error.message)}`);
+  }
+  const sep = redirectTo.includes("?") ? "&" : "?";
+  redirect(`${redirectTo}${sep}success=payment_confirmed`);
+}
+
 // Status change for LEGACY/manual bookings only (slot_id is null). Slot
 // bookings must use transitionSlotBooking and are rejected here defensively.
 export async function updateStatus(formData: FormData) {

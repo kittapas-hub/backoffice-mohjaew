@@ -29,7 +29,7 @@ function fnBody(src: string, name: string): string {
 }
 
 const actionFiles: Record<string, string[]> = {
-  "admin/actions.ts": ["updateStatus", "transitionSlotBooking"],
+  "admin/actions.ts": ["updateStatus", "transitionSlotBooking", "confirmPayment"],
   "admin/day/actions.ts": ["seedDaySlots", "updateSlotCapacity", "toggleSlot"],
 };
 
@@ -42,6 +42,23 @@ for (const [file, names] of Object.entries(actionFiles)) {
       `${file}:${name} must await requireAdmin()`,
     );
   }
+}
+
+// confirmPayment must never read the 'to' field from FormData — the target
+// status is hardcoded server-side so a forged FormData cannot change it.
+{
+  const src = readFileSync(join(appDir, "admin/actions.ts"), "utf8");
+  const body = fnBody(src, "confirmPayment");
+  assert.doesNotMatch(
+    body,
+    /formData\.get\(["']to["']\)/,
+    "confirmPayment must not read 'to' from FormData",
+  );
+  assert.match(
+    body,
+    /p_to:\s*["']confirmed["']/,
+    "confirmPayment must hardcode p_to: \"confirmed\"",
+  );
 }
 
 // Public API routes must NOT be behind requireAdmin (they're customer-facing).
