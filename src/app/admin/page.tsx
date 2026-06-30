@@ -5,6 +5,8 @@ import { signOut } from "./actions";
 import { STATUSES, STATUS_LABEL, StatusBadge } from "./status";
 import { TRANSITION_ERROR_TH, type TransitionErrorCode } from "@/lib/confirm-error";
 import { ConfirmPaymentButton } from "./_components/ConfirmPaymentButton";
+import { SearchForm } from "./_components/SearchForm";
+import { sanitizeSearch } from "./search-helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -23,16 +25,17 @@ type BookingRow = {
 export default async function AdminHome({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; error?: string; success?: string }>;
+  searchParams: Promise<{ status?: string; error?: string; success?: string; q?: string }>;
 }) {
   await requireAdmin();
-  const { status, error: errorParam, success: successParam } = await searchParams;
+  const { status, error: errorParam, success: successParam, q: rawQ } = await searchParams;
   const filter =
     status && STATUSES.includes(status as (typeof STATUSES)[number]) ? status : null;
   const confirmError =
     errorParam && errorParam in TRANSITION_ERROR_TH
       ? TRANSITION_ERROR_TH[errorParam as TransitionErrorCode]
       : null;
+  const q = rawQ ? sanitizeSearch(rawQ) : "";
 
   const db = supabaseAdmin();
   let query = db
@@ -42,14 +45,25 @@ export default async function AdminHome({
     )
     .order("created_at", { ascending: false });
   if (filter) query = query.eq("status", filter);
+  if (q) {
+    // id prefix match covers reference search: reference = id.slice(0,8).toUpperCase()
+    query = query.or(
+      `nickname.ilike.%${q}%,phone.ilike.%${q}%,id.ilike.${q}%`,
+    );
+  }
   const { data, error: listError } = await query;
   if (listError) {
     console.error("[admin-bookings] list query failed", {
       dbCode: listError.code ?? null,
       filtered: Boolean(filter),
+      searched: Boolean(q),
     });
   }
   const bookings = (data ?? []) as unknown as BookingRow[];
+
+  // Build URL helpers for filter chips that preserve the current search query.
+  const qParam = q ? `&q=${encodeURIComponent(q)}` : "";
+  const clearSearchHref = filter ? `/admin?status=${filter}` : "/admin";
 
   return (
     <div>
@@ -81,13 +95,21 @@ export default async function AdminHome({
         </div>
       )}
 
+      <div className="mb-4">
+        <SearchForm
+          defaultValue={q}
+          status={filter}
+          clearHref={clearSearchHref}
+        />
+      </div>
+
       <div className="mb-4 flex flex-wrap gap-2">
-        <FilterChip label="ทั้งหมด" href="/admin" active={!filter} />
+        <FilterChip label="ทั้งหมด" href={`/admin${q ? `?q=${encodeURIComponent(q)}` : ""}`} active={!filter} />
         {STATUSES.map((s) => (
           <FilterChip
             key={s}
             label={STATUS_LABEL[s]}
-            href={`/admin?status=${s}`}
+            href={`/admin?status=${s}${qParam}`}
             active={filter === s}
           />
         ))}
@@ -97,6 +119,7 @@ export default async function AdminHome({
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-left text-gray-500">
             <tr>
+              <th className="px-4 py-3 font-medium">เลขอ้างอิง</th>
               <th className="px-4 py-3">ชื่อเล่น</th>
               <th className="px-4 py-3">โทร</th>
               <th className="px-4 py-3">หัวข้อ</th>
@@ -108,6 +131,11 @@ export default async function AdminHome({
           <tbody>
             {bookings.map((b) => (
               <tr key={b.id} className="border-t border-gray-100 hover:bg-gray-50">
+                <td className="px-4 py-3">
+                  <span className="font-mono text-xs tracking-wide text-gray-700">
+                    {b.id.slice(0, 8).toUpperCase()}
+                  </span>
+                </td>
                 <td className="px-4 py-3">
                   <Link
                     href={`/admin/bookings/${b.id}`}
@@ -157,8 +185,10 @@ export default async function AdminHome({
             ))}
             {bookings.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
-                  ยังไม่มีรายการ
+                <td colSpan={7} className="px-4 py-8 text-center text-gray-400">
+                  {q
+                    ? `ไม่พบรายการที่ตรงกับ "${q}"`
+                    : "ยังไม่มีรายการ"}
                 </td>
               </tr>
             )}

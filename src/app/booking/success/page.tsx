@@ -3,6 +3,8 @@ import { getBookingByToken, type BookingTokenData } from "@/lib/booking-core";
 import { paymentConfig } from "@/lib/env";
 import { CopyButton } from "./CopyButton";
 import { HoldCountdown } from "./HoldCountdown";
+import { LineCta } from "./LineCta";
+import { buildLineHref, buildLinePrefill } from "./helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -135,16 +137,28 @@ export default async function BookingSuccess({
   const hasQR = Boolean(cfg.qrPath);
   const qrSrc = cfg.qrPath.startsWith("/") ? cfg.qrPath : `/${cfg.qrPath}`;
   const deadline = formatThaiDeadline(booking.holdExpiresAt);
+  const linePrefillText = buildLinePrefill({
+    reference: booking.reference,
+    thaiDate: formatThaiDate(booking.bookingDate),
+    slotLabel: booking.slotLabel ?? "-",
+  });
+  const lineHref = cfg.lineOaUrl
+    ? buildLineHref(cfg.lineOaUrl, linePrefillText)
+    : "";
 
   return (
     <main className="mx-auto min-h-screen max-w-md px-5 py-10">
       {/* Header */}
       <div className="mb-6 text-center">
-        <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-rose-100 text-4xl">
-          ✓
+        <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 text-4xl">
+          ⏳
         </div>
-        <h1 className="text-2xl font-bold text-rose-700">จองคิวสำเร็จ</h1>
-        <p className="mt-1 text-sm text-gray-500">รอชำระเงินเพื่อยืนยันคิว</p>
+        <h1 className="text-2xl font-bold text-gray-800">
+          ระบบกำลังถือคิวให้คุณ
+        </h1>
+        <p className="mt-1 text-sm text-gray-500">
+          กรุณาชำระเงินภายในเวลาที่กำหนด เพื่อยืนยันคิวของคุณ
+        </p>
       </div>
 
       {/* Booking summary */}
@@ -159,15 +173,11 @@ export default async function BookingSuccess({
           />
         </dl>
 
-        {booking.holdExpiresAt && deadline && (
-          <div className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-            <p>
-              ถือคิวถึง <span className="font-semibold">{deadline}</span>
-            </p>
-            <p className="mt-0.5 text-xs">
-              เวลาที่เหลือ: <HoldCountdown expiresAt={booking.holdExpiresAt} />
-            </p>
-          </div>
+        {booking.holdExpiresAt && (
+          <HoldCountdown
+            expiresAt={booking.holdExpiresAt}
+            deadline={deadline}
+          />
         )}
       </div>
 
@@ -177,9 +187,12 @@ export default async function BookingSuccess({
 
         {hasPaymentConfig ? (
           <>
-            <p className="mb-4 text-center text-3xl font-bold text-rose-700">
+            <p className="mb-1 text-center text-3xl font-bold text-rose-700">
               {Number(cfg.amount).toLocaleString("th-TH")}{" "}
               <span className="text-lg font-medium">บาท</span>
+            </p>
+            <p className="mb-4 text-center text-sm text-gray-600">
+              โอนยอดเต็มจำนวน แล้วส่งสลิปพร้อมเลขอ้างอิงด้านล่าง
             </p>
 
             {hasQR && (
@@ -214,20 +227,8 @@ export default async function BookingSuccess({
               />
             </dl>
 
-            <p className="mb-5 rounded-lg bg-blue-50 p-3 text-xs text-blue-800">
-              กรุณาส่งสลิปพร้อมเลขอ้างอิงการจอง เพื่อให้ทีมงานยืนยันคิว
-            </p>
-
-            {cfg.lineOaUrl && (
-              <a
-                href={cfg.lineOaUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-500 px-4 py-3 text-base font-semibold text-white shadow-sm hover:bg-green-600 active:bg-green-700"
-              >
-                <span>💬</span>
-                ส่งสลิปผ่าน LINE
-              </a>
+            {lineHref && (
+              <LineCta href={lineHref} expiresAt={booking.holdExpiresAt} />
             )}
           </>
         ) : (
@@ -239,9 +240,9 @@ export default async function BookingSuccess({
 
       <Link
         href="/booking"
-        className="block text-center text-sm text-rose-600 hover:underline"
+        className="block text-center text-sm text-gray-500 hover:underline"
       >
-        จองคิวเพิ่ม
+        กลับไปเลือกวันและเวลาอื่น
       </Link>
     </main>
   );

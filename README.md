@@ -3,9 +3,9 @@
 ระบบจองคิวปรึกษาหมอแจว — Booking Core กลางที่ Website / LINE / Facebook / Instagram
 จะพาลูกค้าเข้ามาจองผ่านฐานข้อมูลและ logic ชุดเดียวกัน
 
-**Booking core เดียว:** ทุกการจองจริงผ่าน slot + capacity + `create_booking` RPC ชุดเดียว
-LINE webhook **ไม่สร้าง booking เอง** — เมื่อลูกค้าทักเริ่มจอง ระบบจะตอบลิงก์ `/booking?source=line`
-ให้ไปจองที่ระบบกลาง (webhook คงไว้สำหรับตอบข้อความ + log group id เท่านั้น)
+**Slot booking core เดียว:** การจองที่เลือกรอบจริงผ่าน slot + capacity + `create_booking` RPC ชุดเดียว
+LINE webhook ตอบลิงก์ `/booking?source=line` เป็นทางหลัก และยังรองรับฟอร์ม LINE OA เดิม:
+เมื่อข้อมูลที่ติด label และรูปครบ จะสร้างรายการ `pending` แบบไม่ผูก slot เพื่อให้แอดมินเห็นและติดต่อกลับ
 
 **Slot booking:** หน้า `/booking` สาธารณะ (mobile-first) ให้ลูกค้าเลือก
 **รอบรายชั่วโมง** (เช่น 18:00–19:00) ที่มี capacity ต่อ slot → สร้าง booking สถานะ `pending_payment`
@@ -135,10 +135,14 @@ session ที่เริ่มจองแล้วไม่ทำต่อจ
 
 1. แอดเป็นเพื่อนกับ LINE OA แล้วแชทแบบ 1-1
 2. พิมพ์คีย์เวิร์ดเริ่มจอง: `จองคิวปรึกษาหมอแจว`
-   → ระบบ **ตอบกลับลิงก์** `…/booking?source=line` (ไม่สร้าง booking จากแชท)
-3. กดลิงก์ → ไปจองที่ระบบกลาง `/booking` (ดูข้อ 8)
-4. ข้อความอื่นที่ไม่ใช่คีย์เวิร์ด → ระบบเงียบ (ไม่ตอบ ไม่สร้างข้อมูล)
-5. เข้า `/admin` → ล็อกอิน magic link (อีเมลต้องอยู่ใน `ADMIN_EMAILS`) → ดู/จัดการรายการ
+   → ระบบตอบลิงก์ `…/booking?source=line` และเปิด session สำหรับฟอร์ม LINE OA เดิม
+3. ทางหลัก: กดลิงก์ → เลือกรอบใน `/booking` → ได้ booking `pending_payment`
+4. ทางฟอร์มเดิม: ส่งข้อมูลที่ติด label ครบและรูป 1 รูป → ได้ booking `pending`
+   แบบไม่ผูก slot; event/session เดิมที่ส่งซ้ำจะคืน booking เดิมและไม่สร้างซ้ำ
+5. ข้อมูลไม่ครบหรือไม่มีรูป → ยังไม่สร้าง booking
+6. รายการ LINE แบบไม่ผูก slot ใช้สำหรับตรวจสอบ/ติดต่อกลับเท่านั้น และยืนยันเป็นคิวจริงไม่ได้
+   จนกว่าลูกค้าจะเลือกรอบผ่าน `/booking?source=line`
+7. เข้า `/admin` → ล็อกอิน magic link (อีเมลต้องอยู่ใน `ADMIN_EMAILS`) → ดู/จัดการรายการ
 
 > booking เก่าที่ slot_id เป็น null (ถ้ามีในฐานข้อมูล) ถือเป็น legacy/manual —
 > admin ยืนยันได้แบบ manual โดยไม่ผูกกับ capacity ของรอบ

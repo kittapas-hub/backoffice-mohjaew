@@ -51,7 +51,7 @@ export function ConfirmPaymentButton({
       disabled={isPending}
       className="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
     >
-      {isPending ? "กำลังดำเนินการ…" : "ยืนยันชำระเงิน"}
+      {isPending ? "กำลังดำเนินการ…" : "ยืนยันการชำระเงิน"}
     </button>
   );
 }
