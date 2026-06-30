@@ -11,6 +11,7 @@ import type { PaymentOrder } from "@/lib/payments/types";
 
 // Legacy/manual (non-slot) bookings can be set to these directly.
 const LEGACY_STATUSES = ["pending", "contacted", "confirmed", "cancelled"] as const;
+const UNSCHEDULED_LINE_STATUSES = ["pending", "contacted", "cancelled"] as const;
 const TRANSITION_LABEL: Record<string, string> = {
   confirmed: "ยืนยัน",
   completed: "เสร็จสิ้น",
@@ -58,6 +59,7 @@ export default async function BookingDetail({
   }
 
   const latestOrder: PaymentOrder | undefined = paymentOrders[0];
+  const isUnscheduledLine = booking.source === "line" && !booking.slot_id;
 
   return (
     <div className="max-w-2xl">
@@ -67,7 +69,14 @@ export default async function BookingDetail({
 
       <div className="mt-4 flex items-center justify-between">
         <h1 className="text-xl font-bold">{booking.nickname}</h1>
-        <StatusBadge status={booking.status} />
+        <div className="text-right">
+          <StatusBadge status={booking.status} />
+          {isUnscheduledLine && (
+            <div className="mt-1 text-xs text-amber-700">
+              รอตรวจสอบ · ยังไม่เลือกเวลา
+            </div>
+          )}
+        </div>
       </div>
 
       {confirmError && (
@@ -183,7 +192,9 @@ export default async function BookingDetail({
           // Legacy/manual booking (no slot).
           <div>
             <p className="mb-2 text-xs text-amber-700">
-              รายการนี้เป็นการจองแบบเดิม (ไม่ผูกกับรอบเวลา)
+              {isUnscheduledLine
+                ? "คำขอจาก LINE นี้ยังไม่ใช่คิวที่จองจริง ต้องให้ลูกค้าเลือกรอบผ่านหน้าจองก่อน"
+                : "รายการนี้เป็นการจองแบบเดิม (ไม่ผูกกับรอบเวลา)"}
             </p>
             <form action={updateStatus} className="flex items-center gap-3">
               <input type="hidden" name="id" value={booking.id} />
@@ -192,7 +203,10 @@ export default async function BookingDetail({
                 defaultValue={booking.status}
                 className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
               >
-                {LEGACY_STATUSES.map((s) => (
+                {(isUnscheduledLine
+                  ? UNSCHEDULED_LINE_STATUSES
+                  : LEGACY_STATUSES
+                ).map((s) => (
                   <option key={s} value={s}>
                     {STATUS_LABEL[s]}
                   </option>

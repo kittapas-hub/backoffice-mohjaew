@@ -39,6 +39,19 @@ export function countOccupied(
   return bookings.reduce((n, b) => n + (occupies(b, now) ? 1 : 0), 0);
 }
 
+export function groupBookingsBySlot<
+  T extends BookingLike & { slot_id: string | null },
+>(bookings: T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const booking of bookings) {
+    if (!booking.slot_id) continue;
+    const list = grouped.get(booking.slot_id) ?? [];
+    list.push(booking);
+    grouped.set(booking.slot_id, list);
+  }
+  return grouped;
+}
+
 export function remainingSeats(
   capacity: number,
   bookings: BookingLike[],

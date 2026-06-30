@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { countOccupied, SLOT_TRANSITIONS, type BookingLike } from "@/lib/slots";
+import {
+  countOccupied,
+  groupBookingsBySlot,
+  SLOT_TRANSITIONS,
+  type BookingLike,
+} from "@/lib/slots";
 import { TRANSITION_ERROR_TH, type TransitionErrorCode } from "@/lib/confirm-error";
 import { StatusBadge } from "../status";
 import { transitionSlotBooking } from "../actions";
@@ -32,7 +37,7 @@ type Slot = {
 
 type Booking = BookingLike & {
   id: string;
-  slot_id: string;
+  slot_id: string | null;
   nickname: string;
   phone: string;
   consultation_topic: string;
@@ -77,12 +82,7 @@ export default async function DayView({
     : { data: null };
   const faceSet = new Set((faceRows ?? []).map((r) => r.booking_id as string));
 
-  const bySlot = new Map<string, Booking[]>();
-  for (const b of (bookings ?? []) as Booking[]) {
-    const list = bySlot.get(b.slot_id) ?? [];
-    list.push(b);
-    bySlot.set(b.slot_id, list);
-  }
+  const bySlot = groupBookingsBySlot((bookings ?? []) as Booking[]);
 
   return (
     <div>

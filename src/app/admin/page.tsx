@@ -16,6 +16,7 @@ type BookingRow = {
   status: string;
   created_at: string;
   slot_id: string | null;
+  source: string | null;
   booking_slots: { booking_date: string; label: string }[] | null;
 };
 
@@ -37,11 +38,17 @@ export default async function AdminHome({
   let query = db
     .from("bookings")
     .select(
-      "id, nickname, phone, consultation_topic, status, created_at, slot_id, booking_slots(booking_date, label)",
+      "id, nickname, phone, consultation_topic, status, created_at, slot_id, source, booking_slots(booking_date, label)",
     )
     .order("created_at", { ascending: false });
   if (filter) query = query.eq("status", filter);
-  const { data } = await query;
+  const { data, error: listError } = await query;
+  if (listError) {
+    console.error("[admin-bookings] list query failed", {
+      dbCode: listError.code ?? null,
+      filtered: Boolean(filter),
+    });
+  }
   const bookings = (data ?? []) as unknown as BookingRow[];
 
   return (
@@ -113,6 +120,11 @@ export default async function AdminHome({
                 <td className="px-4 py-3">{b.consultation_topic}</td>
                 <td className="px-4 py-3">
                   <StatusBadge status={b.status} />
+                  {b.source === "line" && !b.slot_id && (
+                    <div className="mt-1 text-xs text-amber-700">
+                      รอตรวจสอบ · ยังไม่เลือกเวลา
+                    </div>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-gray-500">
                   {new Date(b.created_at).toLocaleString("th-TH")}

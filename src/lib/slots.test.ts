@@ -10,6 +10,7 @@ import {
   isAllowedSource,
   occupies,
   countOccupied,
+  groupBookingsBySlot,
   remainingSeats,
   isSlotFull,
   nextQueueNumber,
@@ -52,6 +53,28 @@ assert.equal(occupies({ status: "pending_payment", hold_expires_at: future }), t
 assert.equal(occupies({ status: "pending_payment", hold_expires_at: past }), false);
 assert.equal(occupies({ status: "expired" }), false);
 assert.equal(occupies({ status: "cancelled" }), false);
+assert.equal(
+  occupies({ status: "pending" }),
+  false,
+  "an unscheduled LINE inquiry must never occupy slot capacity",
+);
+const groupedForDay = groupBookingsBySlot([
+  {
+    slot_id: null,
+    status: "pending",
+  },
+  {
+    slot_id: "slot-a",
+    status: "confirmed",
+  },
+]);
+assert.equal(groupedForDay.has(""), false);
+assert.equal(groupedForDay.get("slot-a")?.length, 1);
+assert.equal(
+  countOccupied(groupedForDay.get("slot-a") ?? []),
+  1,
+  "admin/day must ignore slotless LINE inquiries without error or extra count",
+);
 
 // --- queue number is monotonic, never reused --------------------------------
 assert.equal(nextQueueNumber([]), 1);

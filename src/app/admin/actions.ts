@@ -51,11 +51,11 @@ export async function confirmPayment(formData: FormData) {
 
   const { data: booking } = await db
     .from("bookings")
-    .select("status")
+    .select("status, slot_id")
     .eq("id", id)
     .maybeSingle();
 
-  if (booking?.status !== "pending_payment") {
+  if (booking?.status !== "pending_payment" || !booking.slot_id) {
     const sep = redirectTo.includes("?") ? "&" : "?";
     redirect(`${redirectTo}${sep}error=invalid_transition`);
   }
@@ -91,12 +91,17 @@ export async function updateStatus(formData: FormData) {
   const db = supabaseAdmin();
   const { data: bk } = await db
     .from("bookings")
-    .select("slot_id")
+    .select("slot_id, source")
     .eq("id", id)
     .maybeSingle();
 
   if (bk?.slot_id) {
     // Refuse to bypass the slot state machine.
+    redirect(`/admin/bookings/${id}?error=invalid_transition`);
+  }
+  if (bk?.source === "line" && status === "confirmed") {
+    // A LINE inquiry has no reserved slot. It must not be labelled confirmed
+    // until a real slot booking has been created through the capacity-safe flow.
     redirect(`/admin/bookings/${id}?error=invalid_transition`);
   }
 

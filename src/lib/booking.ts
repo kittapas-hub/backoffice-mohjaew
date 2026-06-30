@@ -92,3 +92,98 @@ export function mergeFields(
 export function hasAllRequired(fields: CollectedFields): boolean {
   return REQUIRED_FIELDS.every((k) => !!fields[k]);
 }
+
+export type LineBookingSession = {
+  id: string;
+  line_user_id: string;
+  line_display_name: string | null;
+  status: string;
+};
+
+export type LegacyLineBookingRecord = {
+  session_id: string;
+  line_user_id: string;
+  line_display_name: string | null;
+  source: "line";
+  nickname: string;
+  birth_date_text: string;
+  consultation_topic: string;
+  phone: string;
+  preferred_time: string;
+  status: "pending";
+};
+
+// LINE conversational bookings do not have a concrete slot. They enter the
+// existing legacy/manual queue as `pending`; only /api/bookings may create a
+// slot booking (`pending_payment`). Requiring both the full labeled form and an
+// image prevents partial LINE messages from creating malformed records.
+export function buildLegacyLineBookingRecord(
+  session: LineBookingSession,
+  fields: CollectedFields,
+  hasImage: boolean,
+): LegacyLineBookingRecord | null {
+  if (session.status !== "active" || !hasImage || !hasAllRequired(fields)) {
+    return null;
+  }
+
+  return {
+    session_id: session.id,
+    line_user_id: session.line_user_id,
+    line_display_name: session.line_display_name,
+    source: "line",
+    nickname: fields.nickname!,
+    birth_date_text: fields.birthDateText!,
+    consultation_topic: fields.consultationTopic!,
+    phone: normalizePhone(fields.phone!),
+    preferred_time: fields.preferredTime!,
+    status: "pending",
+  };
+}
+
+export function hasMatchingImageSignature(
+  bytes: Uint8Array,
+  mimeType: string,
+): boolean {
+  const startsWith = (signature: number[]) =>
+    signature.every((byte, index) => bytes[index] === byte);
+
+  if (mimeType === "image/jpeg") {
+    return bytes.length >= 3 && startsWith([0xff, 0xd8, 0xff]);
+  }
+  if (mimeType === "image/png") {
+    return (
+      bytes.length >= 8 &&
+      startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    );
+  }
+  if (mimeType === "image/webp") {
+    return (
+      bytes.length >= 12 &&
+      startsWith([0x52, 0x49, 0x46, 0x46]) &&
+      bytes[8] === 0x57 &&
+      bytes[9] === 0x45 &&
+      bytes[10] === 0x42 &&
+      bytes[11] === 0x50
+    );
+  }
+  return false;
+}
+
+export async function createLineBookingIdempotently(
+  insert: () => Promise<{ id: string | null; errorCode: string | null }>,
+  findExisting: () => Promise<string | null>,
+): Promise<string> {
+  const created = await insert();
+  if (created.id) return created.id;
+  if (created.errorCode !== "23505") {
+    throw new Error(
+      `line_booking_create_failed:${created.errorCode ?? "unknown"}`,
+    );
+  }
+
+  const existingId = await findExisting();
+  if (!existingId) {
+    throw new Error("line_booking_idempotency_read_failed:not_found");
+  }
+  return existingId;
+}

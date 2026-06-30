@@ -61,6 +61,11 @@ export async function createSlotBooking(
   const valid = validateBookingInput(raw);
   if (!valid.ok) return { ok: false, error: valid.error };
   const v = valid.value;
+  const logContext = {
+    source: v.source,
+    slotId: v.slotId,
+    attempt: opts.idempotencyKey.slice(0, 8),
+  };
 
   const db = supabaseAdmin();
   const { data, error } = await db.rpc("create_booking", {
@@ -77,12 +82,31 @@ export async function createSlotBooking(
 
   if (error) {
     const matched = KNOWN_ERRORS.find((e) => error.message?.includes(e));
-    if (matched) return { ok: false, error: matched };
-    console.error("create_booking failed", error);
+    if (matched) {
+      console.warn("[booking] create rejected", {
+        ...logContext,
+        reason: matched,
+        dbCode: error.code ?? null,
+      });
+      return { ok: false, error: matched };
+    }
+    console.error("[booking] create failed", {
+      ...logContext,
+      dbCode: error.code ?? null,
+    });
     return { ok: false, error: "server_error" };
   }
 
   const booking = (Array.isArray(data) ? data[0] : data) as CreatedBooking;
+  if (!booking?.id) {
+    console.error("[booking] create returned no record", logContext);
+    return { ok: false, error: "server_error" };
+  }
+  console.info("[booking] create succeeded", {
+    ...logContext,
+    bookingId: booking.id,
+    status: booking.status,
+  });
 
   // Face was claimed atomically in the RPC. Fetch its storage path from
   // booking_images and create a 24-hour signed URL for the LINE image message.

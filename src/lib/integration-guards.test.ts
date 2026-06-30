@@ -1,5 +1,6 @@
 // Static guards that protect P0 invariants without needing a DB:
-//  1. The LINE webhook never creates bookings (no slotless bypass of the core).
+//  1. Website slot bookings use the central RPC; completed LINE forms create a
+//     legacy pending inquiry with session/event idempotency.
 //  2. The expire cron always requires CRON_SECRET (never public).
 //  3. RPC grants: only service_role may execute; tables locked for anon/auth.
 //  4. Admin slot bookings change only via the transition RPC (no direct update).
@@ -16,29 +17,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const appDir = join(here, "..", "app");
 const read = (rel: string) => readFileSync(join(here, "..", rel), "utf8");
 
-// --- 1. LINE webhook must not write bookings --------------------------------
+// --- 1. Booking creation paths + LINE idempotency ----------------------------
 const webhook = readFileSync(join(appDir, "api/line/webhook/route.ts"), "utf8");
 
-// No direct writes to the bookings table from the webhook.
-assert.doesNotMatch(
-  webhook,
-  /from\(\s*["'`]bookings["'`]\s*\)/,
-  "LINE webhook must not touch the bookings table",
-);
-// No RPC calls from the webhook at all (no create_booking / confirm_booking bypass).
-assert.doesNotMatch(
-  webhook,
-  /\.rpc\(/,
-  "LINE webhook must not call any booking RPC directly",
-);
-// It should steer customers to the central booking page.
-assert.match(
-  webhook,
-  /\/booking\?source=line/,
-  "LINE webhook should reply with the central booking link",
-);
-
-// The only booking-creation path is the core RPC wrapper.
+// Website/linked-channel slot bookings use the central capacity-safe RPC.
 const core = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "booking-core.ts"),
   "utf8",
@@ -46,6 +28,51 @@ const core = readFileSync(
 assert.match(core, /rpc\(\s*["'`]create_booking["'`]/, "core must create via create_booking RPC");
 assert.match(core, /PAYMENT_HOLD_MINUTES/, "core must use the shared payment hold duration");
 assert.match(core, /p_hold_minutes:\s*PAYMENT_HOLD_MINUTES/, "core must pass hold minutes explicitly");
+
+// A complete LINE form creates only a non-slot pending inquiry. The helper
+// hardcodes source/status, so webhook payloads cannot enter the payment state.
+assert.match(
+  webhook,
+  /from\(\s*["'`]bookings["'`]\s*\)/,
+  "LINE webhook must persist a completed form",
+);
+assert.doesNotMatch(
+  webhook,
+  /\.rpc\(/,
+  "LINE legacy inquiries must not consume slot/payment RPC capacity",
+);
+assert.match(
+  webhook,
+  /\/booking\?source=line/,
+  "LINE start reply should still offer the preferred slot booking page",
+);
+assert.match(
+  webhook,
+  /buildLegacyLineBookingRecord/,
+  "LINE webhook must gate creation on validated complete data",
+);
+assert.match(
+  webhook,
+  /line_webhook_events/,
+  "LINE webhook must claim provider event ids",
+);
+assert.match(
+  webhook,
+  /createLineBookingIdempotently/,
+  "duplicate LINE completion must use the tested idempotency helper",
+);
+assert.match(
+  webhook,
+  /releaseEventClaim/,
+  "failed LINE events must release claims for provider retry",
+);
+
+const initialMigration = read("../supabase/migrations/0001_init.sql");
+assert.match(
+  initialMigration,
+  /session_id\s+uuid unique references public\.booking_sessions/,
+  "bookings.session_id must remain unique for LINE completion idempotency",
+);
 
 // --- 2. Cron expire endpoint must require CRON_SECRET ------------------------
 const cron = readFileSync(join(appDir, "api/cron/expire-bookings/route.ts"), "utf8");
@@ -269,5 +296,50 @@ for (const mig of [
     `${mig} must not set booking-faces bucket to public`,
   );
 }
+
+// --- 9. New bookings are visible in the default admin list ------------------
+const adminPage = read("app/admin/page.tsx");
+assert.match(
+  adminPage,
+  /\.from\(\s*["'`]bookings["'`]\s*\)/,
+  "admin list must query the table used by both creation paths",
+);
+assert.match(
+  adminPage,
+  /if \(filter\) query = query\.eq\(["'`]status["'`], filter\)/,
+  "admin list must filter status only when the admin explicitly asks",
+);
+assert.doesNotMatch(
+  adminPage,
+  /\.not\(\s*["'`]status["'`]|\.in\(\s*["'`]status["'`]/,
+  "admin list must not silently exclude pending or pending_payment records",
+);
+assert.match(
+  adminPage,
+  /slot_id, source,/,
+  "admin list must load source and slot_id to label unscheduled LINE inquiries",
+);
+assert.match(
+  adminPage,
+  /รอตรวจสอบ · ยังไม่เลือกเวลา/,
+  "admin list must clearly label a slotless LINE inquiry",
+);
+
+const adminDayPage = read("app/admin/day/page.tsx");
+assert.match(
+  adminDayPage,
+  /\.in\(\s*["']slot_id["'], slotIds\)/,
+  "admin day must query only bookings attached to the displayed slots",
+);
+assert.match(
+  adminDayPage,
+  /groupBookingsBySlot/,
+  "admin day must defensively discard slotless records before grouping",
+);
+assert.match(
+  adminDayPage,
+  /countOccupied\(list\)/,
+  "admin day occupancy must count only each slot's grouped booking list",
+);
 
 console.log("integration-guards self-check passed");

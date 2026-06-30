@@ -59,6 +59,39 @@ for (const [file, names] of Object.entries(actionFiles)) {
     /p_to:\s*["']confirmed["']/,
     "confirmPayment must hardcode p_to: \"confirmed\"",
   );
+  assert.match(
+    body,
+    /\.from\(\s*["']bookings["']\s*\)[\s\S]*?\.select\(\s*["']status, slot_id["']\s*\)[\s\S]*?\.maybeSingle\(\)/,
+    "confirmPayment must first load an existing booking",
+  );
+  assert.match(
+    body,
+    /booking\?\.status !== ["']pending_payment["']/,
+    "confirmPayment must reject missing and non-pending bookings",
+  );
+  assert.match(
+    body,
+    /!booking\.slot_id/,
+    "confirmPayment must reject a pending_payment record without a slot",
+  );
+  assert.doesNotMatch(
+    body,
+    /\.insert\(|create_booking|createSlotBooking/,
+    "confirmPayment must never create a booking",
+  );
+}
+
+// A slotless LINE inquiry may be contacted/cancelled, but never confirmed as a
+// real queue through the legacy direct-update action.
+{
+  const src = readFileSync(join(appDir, "admin/actions.ts"), "utf8");
+  const body = fnBody(src, "updateStatus");
+  assert.match(body, /\.select\(\s*["']slot_id, source["']\s*\)/);
+  assert.match(
+    body,
+    /bk\?\.source === ["']line["'] && status === ["']confirmed["']/,
+    "slotless LINE inquiries must not be directly confirmed",
+  );
 }
 
 // Public API routes must NOT be behind requireAdmin (they're customer-facing).

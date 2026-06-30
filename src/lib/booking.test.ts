@@ -2,6 +2,9 @@
 // Run: node --experimental-strip-types src/lib/booking.test.ts
 import assert from "node:assert";
 import {
+  buildLegacyLineBookingRecord,
+  createLineBookingIdempotently,
+  hasMatchingImageSignature,
   parseFields,
   mergeFields,
   hasAllRequired,
@@ -46,5 +49,116 @@ assert.equal(
   }),
   true,
 );
+
+// --- LINE completion: full form + image creates one safe legacy record -------
+const lineSession = {
+  id: "11111111-2222-3333-4444-555555555555",
+  line_user_id: "line-user-fixture",
+  line_display_name: "Fixture",
+  status: "active",
+};
+const completeFields = {
+  nickname: "Fixture",
+  birthDateText: "1/1/2540",
+  consultationTopic: "General",
+  phone: "081-234-5678",
+  preferredTime: "Evening",
+};
+const lineRecord = buildLegacyLineBookingRecord(
+  lineSession,
+  completeFields,
+  true,
+);
+assert.deepEqual(lineRecord, {
+  session_id: lineSession.id,
+  line_user_id: lineSession.line_user_id,
+  line_display_name: lineSession.line_display_name,
+  source: "line",
+  nickname: "Fixture",
+  birth_date_text: "1/1/2540",
+  consultation_topic: "General",
+  phone: "0812345678",
+  preferred_time: "Evening",
+  status: "pending",
+});
+
+// Repeated events for one logical session always target the same session_id.
+// The database unique(session_id) constraint returns the original booking.
+assert.equal(
+  buildLegacyLineBookingRecord(lineSession, completeFields, true)?.session_id,
+  lineRecord?.session_id,
+);
+
+// Partial form, missing image, or a completed session creates no booking.
+assert.equal(
+  buildLegacyLineBookingRecord(lineSession, { nickname: "Fixture" }, true),
+  null,
+);
+assert.equal(
+  buildLegacyLineBookingRecord(lineSession, completeFields, false),
+  null,
+);
+assert.equal(
+  buildLegacyLineBookingRecord(
+    { ...lineSession, status: "completed" },
+    completeFields,
+    true,
+  ),
+  null,
+);
+
+// --- LINE image content validation ------------------------------------------
+assert.equal(
+  hasMatchingImageSignature(
+    Uint8Array.from([0xff, 0xd8, 0xff, 0x00]),
+    "image/jpeg",
+  ),
+  true,
+);
+assert.equal(
+  hasMatchingImageSignature(
+    Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    "image/png",
+  ),
+  true,
+);
+assert.equal(
+  hasMatchingImageSignature(
+    Uint8Array.from([
+      0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50,
+    ]),
+    "image/webp",
+  ),
+  true,
+);
+assert.equal(
+  hasMatchingImageSignature(
+    Uint8Array.from([0x3c, 0x73, 0x76, 0x67, 0x3e]),
+    "image/png",
+  ),
+  false,
+  "declared MIME without matching magic bytes must be rejected",
+);
+
+// --- Concurrent duplicate completion: two calls resolve to one booking ------
+let storedBookingId: string | null = null;
+let physicalInsertCount = 0;
+const insertOnce = async () => {
+  await Promise.resolve();
+  if (storedBookingId) return { id: null, errorCode: "23505" };
+  storedBookingId = "synthetic-booking-id";
+  physicalInsertCount += 1;
+  return { id: storedBookingId, errorCode: null };
+};
+const findStored = async () => storedBookingId;
+const concurrentResults = await Promise.all([
+  createLineBookingIdempotently(insertOnce, findStored),
+  createLineBookingIdempotently(insertOnce, findStored),
+]);
+assert.deepEqual(concurrentResults, [
+  "synthetic-booking-id",
+  "synthetic-booking-id",
+]);
+assert.equal(physicalInsertCount, 1, "two concurrent calls must persist one booking");
 
 console.log("booking self-check passed");
