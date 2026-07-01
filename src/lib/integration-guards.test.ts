@@ -298,10 +298,18 @@ assert.doesNotMatch(
   /from\(\s*["'`]bookings["'`]\s*\)/,
   "day actions must not update the bookings table directly",
 );
-assert.match(dayActions, /DEFAULT_HOURLY_SLOTS/, "default slots must be hourly units");
-assert.match(dayActions, /length:\s*12/, "default day should seed 12 hourly slots");
-assert.match(dayActions, /capacity:\s*1/, "default hourly slot capacity should be 1");
-assert.doesNotMatch(dayActions, /09:00["'`],\s*end_time:\s*["'`]12:00/, "must not seed legacy 3-hour morning slot");
+// Default slots are defined once in slot-seeding.ts and shared with the
+// horizon cron — day actions must import them, not define a second list.
+assert.match(
+  dayActions,
+  /from\s+["'`]@\/lib\/slot-seeding["'`]/,
+  "day actions must reuse the shared slot-seeding source (no second divergent slot list)",
+);
+assert.doesNotMatch(dayActions, /length:\s*12/, "day actions must not define its own hardcoded slot list");
+const slotSeedingSrc = read("lib/slot-seeding.ts");
+assert.match(slotSeedingSrc, /length:\s*12/, "default day should seed 12 hourly slots");
+assert.match(slotSeedingSrc, /DEFAULT_SLOT_CAPACITY\s*=\s*1/, "default hourly slot capacity should be 1");
+assert.doesNotMatch(slotSeedingSrc, /09:00["'`],\s*end_time:\s*["'`]12:00/, "must not seed legacy 3-hour morning slot");
 
 // --- 5. POST /api/bookings guards -------------------------------------------
 const bookingsRoute = read("app/api/bookings/route.ts");

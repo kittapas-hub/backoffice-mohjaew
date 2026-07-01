@@ -1,0 +1,27 @@
+name: Ensure slot horizon
+
+on:
+  schedule:
+    # 04:10 Asia/Bangkok (UTC+7) = 21:10 UTC the previous day.
+    - cron: "10 21 * * *"
+  workflow_dispatch:
+
+jobs:
+  ensure-slot-horizon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call ensure-slot-horizon endpoint
+        env:
+          BOOKING_APP_URL: ${{ secrets.BOOKING_APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$BOOKING_APP_URL"
+          test -n "$CRON_SECRET"
+
+          curl --fail --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --request GET \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${BOOKING_APP_URL}/api/cron/ensure-slot-horizon"
