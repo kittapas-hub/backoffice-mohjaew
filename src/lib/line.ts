@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { serverEnv } from "@/lib/env";
 
 const API = "https://api.line.me/v2/bot";
-const DATA_API = "https://api-data.line.me/v2/bot";
 
 // Verify x-line-signature against the RAW request body (HMAC-SHA256, base64).
 export function verifyLineSignature(rawBody: string, signature: string | null): boolean {
@@ -21,17 +20,6 @@ function authHeaders() {
   return { Authorization: `Bearer ${serverEnv.lineAccessToken}` };
 }
 
-export async function replyMessage(replyToken: string, text: string): Promise<void> {
-  const res = await fetch(`${API}/message/reply`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ replyToken, messages: [{ type: "text", text }] }),
-  });
-  if (!res.ok) {
-    console.error("LINE reply failed", res.status, await res.text());
-  }
-}
-
 export async function pushMessage(to: string, text: string): Promise<void> {
   const res = await fetch(`${API}/message/push`, {
     method: "POST",
@@ -39,7 +27,7 @@ export async function pushMessage(to: string, text: string): Promise<void> {
     body: JSON.stringify({ to, messages: [{ type: "text", text }] }),
   });
   if (!res.ok) {
-    console.error("LINE push failed", res.status, await res.text());
+    console.error("LINE push failed", res.status);
   }
 }
 
@@ -63,12 +51,12 @@ export async function notifyTeamSafe(
       body: JSON.stringify({ to: groupId, messages: [{ type: "text", text }] }),
     });
     if (!res.ok) {
-      console.error("[line] team notify failed", res.status, await res.text());
+      console.error("[line] team notify failed", res.status);
       return { ok: false, status: res.status };
     }
     return { ok: true, status: res.status };
   } catch (err) {
-    console.error("[line] team notify error", err);
+    console.error("[line] team notify error", err instanceof Error ? err.message : "unknown");
     return { ok: false };
   }
 }
@@ -96,35 +84,12 @@ export async function notifyTeamImageSafe(
       }),
     });
     if (!res.ok) {
-      console.error("[line] image notify failed", res.status, await res.text());
+      console.error("[line] image notify failed", res.status);
       return { ok: false };
     }
     return { ok: true };
   } catch (err) {
-    console.error("[line] image notify error", err);
+    console.error("[line] image notify error", err instanceof Error ? err.message : "unknown");
     return { ok: false };
   }
-}
-
-export async function getUserDisplayName(userId: string): Promise<string | null> {
-  const res = await fetch(`${API}/profile/${userId}`, { headers: authHeaders() });
-  if (!res.ok) return null;
-  const data = (await res.json()) as { displayName?: string };
-  return data.displayName ?? null;
-}
-
-// Download the binary content of an image message.
-export async function getMessageContent(
-  messageId: string,
-): Promise<{ buffer: Buffer; contentType: string } | null> {
-  const res = await fetch(`${DATA_API}/message/${messageId}/content`, {
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    console.error("LINE content fetch failed", res.status);
-    return null;
-  }
-  const contentType = res.headers.get("content-type") ?? "image/jpeg";
-  const buffer = Buffer.from(await res.arrayBuffer());
-  return { buffer, contentType };
 }

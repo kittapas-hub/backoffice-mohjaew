@@ -3,9 +3,12 @@
 ระบบจองคิวปรึกษาหมอแจว — Booking Core กลางที่ Website / LINE / Facebook / Instagram
 จะพาลูกค้าเข้ามาจองผ่านฐานข้อมูลและ logic ชุดเดียวกัน
 
-**Slot booking core เดียว:** การจองที่เลือกรอบจริงผ่าน slot + capacity + `create_booking` RPC ชุดเดียว
-LINE webhook ตอบลิงก์ `/booking?source=line` เป็นทางหลัก และยังรองรับฟอร์ม LINE OA เดิม:
-เมื่อข้อมูลที่ติด label และรูปครบ จะสร้างรายการ `pending` แบบไม่ผูก slot เพื่อให้แอดมินเห็นและติดต่อกลับ
+**Slot booking core เดียว:** ทุกช่องทาง (LINE / Facebook / Instagram / Website) จองผ่านทางเดียวเท่านั้น:
+`/booking?source=<channel>` → `POST /api/bookings` → `createSlotBooking` → `create_booking` RPC
+— ไม่มี booking ไหนถูกสร้างโดยไม่มี `slot_id` LINE OA **ไม่มี conversational booking flow อีกต่อไป**:
+Rich Menu / auto-reply / keyword reply ใน LINE OA Manager (ตั้งค่านอก repo) ชี้ลูกค้าไปที่ลิงก์จองโดยตรง
+`POST /api/line/webhook` เหลือไว้แค่ verify signature แล้วตอบ ok — ไม่สร้าง booking, session,
+image record หรือ storage object ใดๆ และไม่มี reply ที่ต้องพึ่งพา (ไม่มี critical delivery path)
 
 **Slot booking:** หน้า `/booking` สาธารณะ (mobile-first) ให้ลูกค้าเลือก
 **รอบรายชั่วโมง** (เช่น 18:00–19:00) ที่มี capacity ต่อ slot → สร้าง booking สถานะ `pending_payment`
@@ -72,7 +75,6 @@ migration จะสร้าง bucket `booking-faces` แบบ **private** ใ
 | `LINE_CHANNEL_SECRET` | ใช้ตรวจสอบ signature ของ webhook |
 | `LINE_BOOKING_NOTIFY_GROUP_ID` | group ID ของกลุ่มทีมงานที่จะรับแจ้งเตือน |
 | `ADMIN_EMAILS` | อีเมลแอดมินที่อนุญาตให้เข้า `/admin` คั่นด้วย comma |
-| `BOOKING_START_KEYWORDS` | คีย์เวิร์ดเริ่มจอง (ดีฟอลต์ `จองคิวปรึกษาหมอแจว`) คั่นด้วย comma |
 | `BOOKING_PAYMENT_AMOUNT_THB` | ยอดชำระเงิน (บาท) แสดงบนหน้า `/booking/success` |
 | `BOOKING_BANK_NAME` | ชื่อธนาคาร เช่น `กสิกรไทย` |
 | `BOOKING_ACCOUNT_NAME` | ชื่อบัญชี |
@@ -101,51 +103,57 @@ npm run dev
 
 ## 6. ตั้งค่า LINE webhook
 
+`/api/line/webhook` **ไม่ใช่ booking flow แล้ว** — มันแค่ verify signature แล้วตอบ `{ ok: true }`
+ไม่สร้าง booking, session, image record หรือ storage object ใดๆ และไม่มี reply ใดๆ ที่ระบบต้องพึ่งพา
+เหตุผลที่ยังต้องตั้ง webhook URL คือ LINE Developers Console บังคับให้มี endpoint ไว้รับ event เท่านั้น
+
 1. ไปที่ [LINE Developers Console](https://developers.line.biz) → Messaging API channel
 2. ตั้ง **Webhook URL** เป็น:
    `https://your-app.vercel.app/api/line/webhook`
 3. เปิด **Use webhook**
-4. ปิด auto-reply / greeting ที่ทับซ้อนได้ตามต้องการ (ฟอร์มจอง OA Manager ส่งให้ลูกค้าอยู่แล้ว)
 
-> ระบบนี้ **ไม่ส่งฟอร์มจองซ้ำ** เพราะ LINE OA Manager ส่งฟอร์มเดิมอยู่แล้ว
-> เพียงแค่ติดตามคำตอบของลูกค้าอย่างเงียบ ๆ
+### ตั้ง CTA "จองคิว" ใน LINE OA Manager (ต้องทำนอก repo)
+
+เนื่องจาก webhook ไม่ตอบข้อความลูกค้าอีกต่อไป **ต้องตั้งค่า Rich Menu / auto-reply / keyword reply
+ใน [LINE Official Account Manager](https://manager.line.biz) เอง** ให้ลิงก์ไปที่หน้าจองโดยตรง:
+
+```
+https://backoffice-mohjaew.vercel.app/booking?source=line
+```
+
+(แทน `backoffice-mohjaew.vercel.app` ด้วยโดเมนจริงของคุณถ้าต่างจากนี้) ระบบนี้จะไม่ตรวจสอบหรือ
+ตั้งค่าฝั่ง LINE OA Manager ให้อัตโนมัติ — เป็น manual checklist ที่ต้องทำเองในคอนโซลของ LINE
 
 ### วิธีหา `LINE_BOOKING_NOTIFY_GROUP_ID`
 
-LINE ไม่แสดง group ID ในแอป ต้องดึงจาก webhook event:
+LINE ไม่แสดง group ID ในแอป และค่านี้ใช้เฉพาะแจ้งเตือนทีมงานเมื่อมี **booking จริง** (ผ่าน `/booking`)
+ไม่เกี่ยวกับ webhook conversational flow (ซึ่งถูกถอดออกแล้ว):
 
-1. ตั้ง webhook URL และเปิด Use webhook ให้เรียบร้อย (ขั้นตอนข้างบน)
-2. เชิญ LINE OA เข้ากลุ่มทีมงานที่ต้องการรับแจ้งเตือน
-3. พิมพ์ข้อความอะไรก็ได้ในกลุ่มนั้น 1 ครั้ง
-4. เปิด **Logs** (Vercel → Deployment → Functions/Logs หรือ terminal ตอนรัน `npm run dev`)
-   จะเห็นบรรทัด:
-   ```
-   [line] groupId (for LINE_BOOKING_NOTIFY_GROUP_ID): Cxxxxxxxxxxxxxxxx
-   ```
-5. คัดลอกค่า `Cxxxx...` ไปใส่ใน `LINE_BOOKING_NOTIFY_GROUP_ID`
-
-> group ID ถูก log ลง server log เท่านั้น (ไม่ตอบกลับในแชทและไม่เปิดเผยต่อสาธารณะ)
-
-### อายุของ session
-
-session ที่เริ่มจองแล้วไม่ทำต่อจะ **หมดอายุอัตโนมัติภายใน 24 ชั่วโมง** (นับจากกิจกรรมล่าสุด)
-ข้อความที่ส่งมาภายหลังจะไม่ถูกนำไปรวมกับ session เก่า — ต้องพิมพ์คีย์เวิร์ดเริ่มจองใหม่
+1. เชิญ LINE OA เข้ากลุ่มทีมงานที่ต้องการรับแจ้งเตือน
+2. หา group ID ด้วยวิธีอื่น (เช่น LINE Official Account Manager หรือ log ชั่วคราวตอน dev)
+3. ใส่ค่า `Cxxxx...` ใน `LINE_BOOKING_NOTIFY_GROUP_ID`
 
 ## 7. ขั้นตอนทดสอบ LINE (ด้วยข้อมูลจริงของคุณเอง)
 
-1. แอดเป็นเพื่อนกับ LINE OA แล้วแชทแบบ 1-1
-2. พิมพ์คีย์เวิร์ดเริ่มจอง: `จองคิวปรึกษาหมอแจว`
-   → ระบบตอบลิงก์ `…/booking?source=line` และเปิด session สำหรับฟอร์ม LINE OA เดิม
-3. ทางหลัก: กดลิงก์ → เลือกรอบใน `/booking` → ได้ booking `pending_payment`
-4. ทางฟอร์มเดิม: ส่งข้อมูลที่ติด label ครบและรูป 1 รูป → ได้ booking `pending`
-   แบบไม่ผูก slot; event/session เดิมที่ส่งซ้ำจะคืน booking เดิมและไม่สร้างซ้ำ
-5. ข้อมูลไม่ครบหรือไม่มีรูป → ยังไม่สร้าง booking
-6. รายการ LINE แบบไม่ผูก slot ใช้สำหรับตรวจสอบ/ติดต่อกลับเท่านั้น และยืนยันเป็นคิวจริงไม่ได้
-   จนกว่าลูกค้าจะเลือกรอบผ่าน `/booking?source=line`
-7. เข้า `/admin` → ล็อกอิน magic link (อีเมลต้องอยู่ใน `ADMIN_EMAILS`) → ดู/จัดการรายการ
+1. เปิด `/booking?source=line` โดยตรง (หรือกดผ่าน CTA ที่ตั้งใน LINE OA Manager ตามข้อ 6)
+2. เลือกวันและรอบ → กรอกข้อมูล → อัปโหลดรูปหน้า (face-upload token) → กดยืนยัน
+   → ได้ booking เดียวที่มี `slot_id`, `status=pending_payment`
+3. ส่งข้อความอะไรก็ได้ไปที่ LINE OA โดยตรง (ไม่ผ่านหน้าจอง) → **ไม่มีอะไรเกิดขึ้น**
+   ไม่มี reply, ไม่สร้าง session, ไม่สร้าง booking — webhook แค่ verify signature แล้วตอบ ok เงียบๆ
+4. ส่งรูปไปที่ LINE OA โดยตรง → ถูกละเว้นเงียบๆ ไม่ดาวน์โหลด ไม่ validate ไม่อัปโหลดขึ้น Storage
+   และไม่ insert ลง `booking_images`
+5. เข้า `/admin` → ล็อกอิน magic link (อีเมลต้องอยู่ใน `ADMIN_EMAILS`) → เห็น booking จากข้อ 2
 
-> booking เก่าที่ slot_id เป็น null (ถ้ามีในฐานข้อมูล) ถือเป็น legacy/manual —
-> admin ยืนยันได้แบบ manual โดยไม่ผูกกับ capacity ของรอบ
+> **ข้อมูลเก่าใน production ไม่ถูกแตะต้อง:** `booking_sessions`/`booking_images`/`bookings` ที่มีอยู่
+> ก่อนหน้านี้ (จาก conversational flow เดิม) ยังอยู่ในฐานข้อมูลเหมือนเดิม ระบบนี้แค่หยุดสร้างแถวใหม่
+> ผ่าน webhook เท่านั้น booking เก่าที่ `slot_id` เป็น null ยังเป็น legacy/manual — admin ติดต่อ/
+> ปรับสถานะ manual ได้ตาม `updateStatus` แต่ยืนยัน payment (`confirmPayment`) ไม่ได้
+
+> **ของเดิมที่อาจค้างอยู่ใน production:** ก่อน/หลัง deploy ควรเช็คว่ามีแถวใน `booking_images`
+> ที่ `booking_id IS NULL` ค้างอยู่หรือไม่ (รูปจาก conversational flow เดิมก่อนแก้ไขนี้) ถ้ามี ให้แยกเป็นงาน
+> maintenance ที่ผ่านการ review ต่างหากเพื่อลบทั้ง object ใน private Storage และแถวใน DB ที่ตรงกัน
+> (ห้ามลบแถว DB โดยไม่ลบ Storage object ที่เกี่ยวข้อง และห้าม log storage path หรือข้อมูลส่วนบุคคลใดๆ)
+> patch นี้ไม่ได้เขียน cleanup job อัตโนมัติให้
 
 ## 8. Slot booking (Website / ทุกช่องทาง)
 
@@ -305,7 +313,7 @@ session ที่เริ่มจองแล้วไม่ทำต่อจ
 ```
 src/
   app/
-    api/line/webhook/route.ts        # LINE: signature + session/booking
+    api/line/webhook/route.ts        # LINE: signature verify only, no booking flow
     api/slots/route.ts               # public: รอบว่างของวัน
     api/bookings/route.ts            # public: สร้าง booking (ผ่าน core เดียว)
     api/cron/expire-bookings/route.ts# job คืนที่ว่างจาก hold ที่หมดเวลา
@@ -316,8 +324,7 @@ src/
   lib/
     slots.ts                         # กฎ capacity/queue/validation (pure, มี test)
     booking-core.ts                  # createSlotBooking / getAvailableSlots (เรียก RPC)
-    line.ts                          # signature, reply, notifyTeamSafe, content
-    booking.ts                       # parser LINE conversational
+    line.ts                          # signature verify, pushMessage, notifyTeamSafe
     supabase/ env.ts auth.ts
 supabase/migrations/0001_init.sql
 supabase/migrations/0002_booking_slots.sql
@@ -328,6 +335,6 @@ supabase/migrations/0002_booking_slots.sql
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint (next lint)
-npm run test        # parser + slot capacity + admin auth-guard self-checks
+npm run test        # slot capacity + admin auth-guard + integration self-checks
 npm run build
 ```

@@ -1,77 +1,235 @@
 // Static guards that protect P0 invariants without needing a DB:
-//  1. Website slot bookings use the central RPC; completed LINE forms create a
-//     legacy pending inquiry with session/event idempotency.
+//  1. A booking can only ever be created via POST /api/bookings ->
+//     createSlotBooking -> the create_booking RPC (AST-verified, recursively,
+//     across all of src). The LINE webhook is not a booking-creation path: it
+//     cannot access bookings/booking_sessions/booking_images/Storage, and it
+//     cannot create a booking, session, image record, or storage object.
 //  2. The expire cron always requires CRON_SECRET (never public).
 //  3. RPC grants: only service_role may execute; tables locked for anon/auth.
 //  4. Admin slot bookings change only via the transition RPC (no direct update).
 //  5. POST /api/bookings has idempotency, honeypot, duplicate + rate-limit guards
 //     and never accepts client-controlled status/queue/hold/capacity.
 //  6. Browser/client code never calls booking RPCs directly.
+//  7. No LINE sender logs a raw LINE API response body.
+// Guards 1 and 7 are AST-based (TypeScript compiler API), not text-window or
+// regex matching, so a `create_booking` mention in a comment/doc never fails
+// the test, and a future non-booking `.rpc(...)` call in the webhook is not
+// forbidden by an over-broad "no .rpc( at all" rule.
 // Run: node --experimental-strip-types src/lib/integration-guards.test.ts
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import ts from "typescript";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appDir = join(here, "..", "app");
 const read = (rel: string) => readFileSync(join(here, "..", rel), "utf8");
 
-// --- 1. Booking creation paths + LINE idempotency ----------------------------
-const webhook = readFileSync(join(appDir, "api/line/webhook/route.ts"), "utf8");
+// --- AST helpers --------------------------------------------------------------
+function parseSource(filePath: string): ts.SourceFile {
+  const text = readFileSync(filePath, "utf8");
+  const kind = filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  return ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, kind);
+}
+
+function forEachDescendant(node: ts.Node, visit: (n: ts.Node) => void): void {
+  visit(node);
+  ts.forEachChild(node, (child) => forEachDescendant(child, visit));
+}
+
+// True for `<expr>.rpc("create_booking", ...)`.
+function isCreateBookingRpcCall(node: ts.Node): boolean {
+  if (!ts.isCallExpression(node)) return false;
+  const callee = node.expression;
+  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "rpc") return false;
+  const [firstArg] = node.arguments;
+  return !!firstArg && ts.isStringLiteralLike(firstArg) && firstArg.text === "create_booking";
+}
+
+// True for `<expr>.from("bookings").insert(...)`.
+function isBookingsInsertCall(node: ts.Node): boolean {
+  if (!ts.isCallExpression(node)) return false;
+  const callee = node.expression;
+  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "insert") return false;
+  const target = callee.expression;
+  if (!ts.isCallExpression(target)) return false;
+  const targetCallee = target.expression;
+  if (!ts.isPropertyAccessExpression(targetCallee) || targetCallee.name.text !== "from") return false;
+  const [fromArg] = target.arguments;
+  return !!fromArg && ts.isStringLiteralLike(fromArg) && fromArg.text === "bookings";
+}
+
+// Every Identifier/StringLiteral whose text exactly matches one of `names`.
+// AST-based, so a comment or doc string mentioning the name never matches —
+// only a real code reference (call, property access, import, string arg) does.
+function findReferencedNames(sf: ts.SourceFile, names: string[]): string[] {
+  const hits = new Set<string>();
+  forEachDescendant(sf, (node) => {
+    if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && names.includes(node.text)) {
+      hits.add(node.text);
+    }
+  });
+  return [...hits];
+}
+
+// Every `console.<method>(...)` call whose arguments contain a no-arg
+// `.text()` call anywhere in their subtree — i.e. reading a raw fetch
+// Response body (which may echo request content / tokens back).
+function findConsoleRawBodyLogging(sf: ts.SourceFile): string[] {
+  const offenders: string[] = [];
+  forEachDescendant(sf, (node) => {
+    if (
+      !ts.isCallExpression(node) ||
+      !ts.isPropertyAccessExpression(node.expression) ||
+      !ts.isIdentifier(node.expression.expression) ||
+      node.expression.expression.text !== "console"
+    ) {
+      return;
+    }
+    for (const arg of node.arguments) {
+      let logsBody = false;
+      forEachDescendant(arg, (inner) => {
+        if (
+          ts.isCallExpression(inner) &&
+          ts.isPropertyAccessExpression(inner.expression) &&
+          inner.expression.name.text === "text" &&
+          inner.arguments.length === 0
+        ) {
+          logsBody = true;
+        }
+      });
+      if (logsBody) offenders.push((node.expression as ts.PropertyAccessExpression).name.text);
+    }
+  });
+  return offenders;
+}
+
+function importsNamedFrom(sf: ts.SourceFile, moduleSubstring: string, importName: string): boolean {
+  let found = false;
+  ts.forEachChild(sf, (node) => {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteralLike(node.moduleSpecifier) &&
+      node.moduleSpecifier.text.includes(moduleSubstring)
+    ) {
+      const bindings = node.importClause?.namedBindings;
+      if (bindings && ts.isNamedImports(bindings) && bindings.elements.some((el) => el.name.text === importName)) {
+        found = true;
+      }
+    }
+  });
+  return found;
+}
+
+function callsIdentifier(sf: ts.SourceFile, name: string): boolean {
+  let found = false;
+  forEachDescendant(sf, (node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === name) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+function listSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules") continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...listSourceFiles(full));
+    } else if (/\.tsx?$/.test(entry.name) && !entry.name.endsWith(".test.ts")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+// --- 1. Sole booking-creation path + LINE webhook cannot create anything -----
 
 // Website/linked-channel slot bookings use the central capacity-safe RPC.
-const core = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "booking-core.ts"),
-  "utf8",
-);
+const core = readFileSync(join(here, "booking-core.ts"), "utf8");
 assert.match(core, /rpc\(\s*["'`]create_booking["'`]/, "core must create via create_booking RPC");
 assert.match(core, /PAYMENT_HOLD_MINUTES/, "core must use the shared payment hold duration");
 assert.match(core, /p_hold_minutes:\s*PAYMENT_HOLD_MINUTES/, "core must pass hold minutes explicitly");
 
-// A complete LINE form creates only a non-slot pending inquiry. The helper
-// hardcodes source/status, so webhook payloads cannot enter the payment state.
-assert.match(
-  webhook,
-  /from\(\s*["'`]bookings["'`]\s*\)/,
-  "LINE webhook must persist a completed form",
+// Recursive scan: only booking-core.ts may call the create_booking RPC, and no
+// file anywhere under src may insert into `bookings` directly — creation is
+// exclusively through that one RPC.
+const srcRoot = join(here, "..");
+const CREATE_BOOKING_RPC_ALLOWLIST = ["lib/booking-core.ts"];
+const BOOKINGS_INSERT_ALLOWLIST: string[] = [];
+
+let sawCreateBookingRpcCall = false;
+for (const file of listSourceFiles(srcRoot)) {
+  const rel = relative(srcRoot, file).split("\\").join("/");
+  const sf = parseSource(file);
+
+  forEachDescendant(sf, (node) => {
+    if (isCreateBookingRpcCall(node)) {
+      sawCreateBookingRpcCall = true;
+      assert.ok(
+        CREATE_BOOKING_RPC_ALLOWLIST.includes(rel),
+        `${rel} calls the create_booking RPC directly — only booking-core.ts may`,
+      );
+    }
+    if (isBookingsInsertCall(node)) {
+      assert.ok(
+        BOOKINGS_INSERT_ALLOWLIST.includes(rel),
+        `${rel} inserts into bookings directly — only the create_booking RPC may create a booking`,
+      );
+    }
+  });
+}
+assert.ok(sawCreateBookingRpcCall, "sanity check: the create_booking RPC call site must exist (in booking-core.ts)");
+
+// POST /api/bookings must be the route that creates slot bookings.
+const bookingsRouteSf = parseSource(join(appDir, "api/bookings/route.ts"));
+assert.ok(
+  importsNamedFrom(bookingsRouteSf, "booking-core", "createSlotBooking"),
+  "POST /api/bookings must import createSlotBooking from booking-core",
 );
-assert.doesNotMatch(
-  webhook,
-  /\.rpc\(/,
-  "LINE legacy inquiries must not consume slot/payment RPC capacity",
-);
-assert.match(
-  webhook,
-  /\/booking\?source=line/,
-  "LINE start reply should still offer the preferred slot booking page",
-);
-assert.match(
-  webhook,
-  /buildLegacyLineBookingRecord/,
-  "LINE webhook must gate creation on validated complete data",
-);
-assert.match(
-  webhook,
-  /line_webhook_events/,
-  "LINE webhook must claim provider event ids",
-);
-assert.match(
-  webhook,
-  /createLineBookingIdempotently/,
-  "duplicate LINE completion must use the tested idempotency helper",
-);
-assert.match(
-  webhook,
-  /releaseEventClaim/,
-  "failed LINE events must release claims for provider retry",
+assert.ok(
+  callsIdentifier(bookingsRouteSf, "createSlotBooking"),
+  "POST /api/bookings must call createSlotBooking",
 );
 
-const initialMigration = read("../supabase/migrations/0001_init.sql");
-assert.match(
-  initialMigration,
-  /session_id\s+uuid unique references public\.booking_sessions/,
-  "bookings.session_id must remain unique for LINE completion idempotency",
+// The LINE webhook must not be able to create a booking, session, image
+// record, or storage object at all: it must not reference any of these
+// tables/APIs/helpers anywhere in real code (comments don't count — this is
+// an AST check, not a text search).
+const webhookPath = join(appDir, "api/line/webhook/route.ts");
+const webhook = readFileSync(webhookPath, "utf8");
+const webhookSf = parseSource(webhookPath);
+const FORBIDDEN_WEBHOOK_NAMES = [
+  "bookings",
+  "booking_sessions",
+  "booking_images",
+  "storage",
+  "create_booking",
+  "createSlotBooking",
+  "getMessageContent",
+  "hasMatchingImageSignature",
+];
+const webhookHits = findReferencedNames(webhookSf, FORBIDDEN_WEBHOOK_NAMES);
+assert.deepEqual(
+  webhookHits,
+  [],
+  `LINE webhook must not access bookings/sessions/images/Storage or the booking RPC/helper (found: ${webhookHits.join(", ")}) — it cannot create a booking, session, image record, or storage object`,
+);
+assert.match(webhook, /verifyLineSignature/, "LINE webhook must still verify the LINE signature");
+// Deliberately NOT a blanket "no .rpc( at all" ban — a future non-booking RPC
+// call in the webhook must remain possible; only create_booking is forbidden
+// (enforced by the recursive scan above, which covers this file too).
+
+// --- 7. No LINE sender logs a raw LINE API response body --------------------
+const lineLibSf = parseSource(join(here, "line.ts"));
+const rawBodyLoggers = findConsoleRawBodyLogging(lineLibSf);
+assert.deepEqual(
+  rawBodyLoggers,
+  [],
+  `line.ts must not log a raw LINE response body via .text() (found in console.${rawBodyLoggers.join(", console.")})`,
 );
 
 // --- 2. Cron expire endpoint must require CRON_SECRET ------------------------

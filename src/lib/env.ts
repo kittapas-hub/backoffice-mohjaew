@@ -62,11 +62,3 @@ export function paymentConfig() {
     lineOaUrl: process.env.NEXT_PUBLIC_LINE_OA_URL ?? "",
   };
 }
-
-export function bookingStartKeywords(): string[] {
-  const raw = process.env.BOOKING_START_KEYWORDS ?? "จองคิวปรึกษาหมอแจว";
-  return raw
-    .split(",")
-    .map((k) => k.trim())
-    .filter(Boolean);
-}
