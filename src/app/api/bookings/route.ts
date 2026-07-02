@@ -5,6 +5,7 @@ import {
   recordRateHit,
   type CreateBookingError,
 } from "@/lib/booking-core";
+import { clientIp } from "@/lib/client-ip";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,12 +41,6 @@ const STATUS_CODE: Record<CreateBookingError, number> = {
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function clientIp(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("x-real-ip") ?? "unknown";
-}
 
 // POST /api/bookings — central creation path for all channels.
 export async function POST(req: Request) {

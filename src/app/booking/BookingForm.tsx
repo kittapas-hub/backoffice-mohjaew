@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { PAYMENT_HOLD_MINUTES } from "@/lib/slots";
 
 const FACE_ACCEPT = "image/jpeg,image/png,image/webp";
 const FACE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -20,7 +19,13 @@ function todayISO() {
   return new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD, local
 }
 
-export default function BookingForm({ source }: { source: string }) {
+export default function BookingForm({
+  source,
+  holdMinutes,
+}: {
+  source: string;
+  holdMinutes: number;
+}) {
   const router = useRouter();
   const [date, setDate] = useState(todayISO());
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -342,7 +347,7 @@ export default function BookingForm({ source }: { source: string }) {
           {submitting ? "กำลังจอง..." : "ยืนยันการจองคิว"}
         </button>
         <p className="booking-note">
-          เมื่อจองแล้วระบบจะถือคิวให้ {PAYMENT_HOLD_MINUTES} นาที เพื่อรอการชำระเงิน
+          เมื่อจองแล้วระบบจะถือคิวให้ {holdMinutes} นาที เพื่อรอการชำระเงิน
         </p>
       </section>
     </form>

@@ -151,8 +151,12 @@ function listSourceFiles(dir: string): string[] {
 // Website/linked-channel slot bookings use the central capacity-safe RPC.
 const core = readFileSync(join(here, "booking-core.ts"), "utf8");
 assert.match(core, /rpc\(\s*["'`]create_booking["'`]/, "core must create via create_booking RPC");
-assert.match(core, /PAYMENT_HOLD_MINUTES/, "core must use the shared payment hold duration");
-assert.match(core, /p_hold_minutes:\s*PAYMENT_HOLD_MINUTES/, "core must pass hold minutes explicitly");
+assert.match(core, /paymentHoldMinutes/, "core must use the shared payment hold duration");
+assert.match(
+  core,
+  /p_hold_minutes:\s*paymentHoldMinutes\(process\.env\.BOOKING_HOLD_MINUTES\)/,
+  "core must pass hold minutes explicitly from the env-configurable source",
+);
 
 // Recursive scan: only booking-core.ts may call the create_booking RPC, and no
 // file anywhere under src may insert into `bookings` directly — creation is
@@ -490,6 +494,23 @@ assert.match(
   /รอตรวจสอบ · ยังไม่เลือกเวลา/,
   "admin list must clearly label a slotless LINE inquiry",
 );
+
+// --- 10. Public GET /api/slots is rate limited and IPs come from the
+// trusted platform header only (x-forwarded-for's first hop is spoofable).
+const slotsRoute = read("app/api/slots/route.ts");
+assert.match(slotsRoute, /BOOKING_RATE_LIMIT_SECRET/, "slots route must require the rate-limit secret");
+assert.match(slotsRoute, /recordRateHit/, "slots route must call recordRateHit");
+assert.match(slotsRoute, /\b429\b/, "slots route must return 429 when rate limited");
+const clientIpSrc = read("lib/client-ip.ts");
+assert.match(clientIpSrc, /x-vercel-forwarded-for/, "clientIp must prefer the platform-set x-vercel-forwarded-for header");
+assert.match(clientIpSrc, /x-real-ip/, "clientIp must fall back to the platform-set x-real-ip header");
+assert.doesNotMatch(clientIpSrc, /get\(\s*["'`]x-forwarded-for["'`]\s*\)/, "clientIp must not trust x-forwarded-for");
+assert.match(clientIpSrc, /process\.env\.VERCEL/, "clientIp must only log the fallback loudly when running on Vercel");
+for (const f of ["app/api/bookings/route.ts", "app/api/bookings/face-upload/route.ts", "app/api/slots/route.ts"]) {
+  const src = read(f);
+  assert.match(src, /from\s+["'`]@\/lib\/client-ip["'`]/, `${f} must use the shared trusted clientIp helper`);
+  assert.doesNotMatch(src, /x-forwarded-for/, `${f} must not read x-forwarded-for`);
+}
 
 const adminDayPage = read("app/admin/day/page.tsx");
 assert.match(

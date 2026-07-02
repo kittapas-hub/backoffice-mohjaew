@@ -6,7 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
 import { notifyTeamSafe, notifyTeamImageSafe } from "@/lib/line";
 import {
-  PAYMENT_HOLD_MINUTES,
+  paymentHoldMinutes,
   validateBookingInput,
   type BookingInput,
 } from "@/lib/slots";
@@ -75,7 +75,7 @@ export async function createSlotBooking(
     p_phone: v.phone,
     p_consultation_topic: v.consultationTopic,
     p_birth_date_text: v.birthDateText,
-    p_hold_minutes: PAYMENT_HOLD_MINUTES,
+    p_hold_minutes: paymentHoldMinutes(process.env.BOOKING_HOLD_MINUTES),
     p_idempotency_key: opts.idempotencyKey,
     p_face_upload_token: opts.faceUploadToken ?? null,
   });
@@ -145,7 +145,7 @@ async function sendTeamNotify(b: CreatedBooking, faceSignedUrl: string | null) {
     `หัวข้อ: ${b.consultation_topic}`,
     `ช่องทาง: ${b.source}`,
     faceSignedUrl ? "📷 รูปหน้า: แนบมาแล้ว (รูปส่งต่อด้านล่าง)" : "📷 รูปหน้า: ไม่มี",
-    `สถานะ: รอชำระเงิน (hold ${PAYMENT_HOLD_MINUTES} นาที)`,
+    `สถานะ: รอชำระเงิน (hold ${paymentHoldMinutes(process.env.BOOKING_HOLD_MINUTES)} นาที)`,
     `Backoffice: ${link}`,
   ].join("\n");
   const textResult = await notifyTeamSafe(text);

@@ -126,7 +126,26 @@ export type ValidatedInput = Omit<BookingInput, "source"> & {
   source: BookingSource;
 };
 
-export const PAYMENT_HOLD_MINUTES = 10;
+// Default payment hold. Overridable per environment via BOOKING_HOLD_MINUTES
+// (parsed by paymentHoldMinutes below). Trade-off: a short hold frees seats
+// fast but risks "paid but expired" — the customer bank-transfers near the
+// deadline, the hold lapses before the slip is seen, the seat is resold and
+// the expired booking has no valid transition back. With manual bank-transfer
+// verification 30 minutes is the safer default; shorten only once payment
+// confirmation is instant (provider webhook).
+export const PAYMENT_HOLD_MINUTES = 30;
+const HOLD_MINUTES_MIN = 5;
+const HOLD_MINUTES_MAX = 120;
+
+// Pure parse of the BOOKING_HOLD_MINUTES env value. Non-numeric/absent input
+// falls back to the default; numeric input is clamped to a sane range so a
+// typo (e.g. "3000") can't create day-long phantom holds or sub-minute churn.
+export function paymentHoldMinutes(raw?: string | null): number {
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n)) return PAYMENT_HOLD_MINUTES;
+  return Math.min(HOLD_MINUTES_MAX, Math.max(HOLD_MINUTES_MIN, Math.trunc(n)));
+}
+
 export const DEFAULT_CONSULTATION_TOPIC = "ไม่ได้ระบุหัวข้อพิเศษ";
 
 const UUID_RE =
