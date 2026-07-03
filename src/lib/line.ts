@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { serverEnv } from "@/lib/env";
+import { serverEnv } from "./env.ts";
 
 const API = "https://api.line.me/v2/bot";
 
@@ -20,15 +20,28 @@ function authHeaders() {
   return { Authorization: `Bearer ${serverEnv.lineAccessToken}` };
 }
 
-export async function pushMessage(to: string, text: string): Promise<void> {
-  const res = await fetch(`${API}/message/push`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ to, messages: [{ type: "text", text }] }),
-  });
-  if (!res.ok) {
-    console.error("LINE push failed", res.status);
+export type PushResult = { ok: true } | { ok: false; retryable: boolean; error: string };
+
+// Classifies the outcome instead of throwing/logging so callers (e.g. the
+// delivery worker) can decide retry vs. dead without ever seeing the token,
+// recipient id, request payload, or raw LINE response body.
+export async function pushMessage(to: string, text: string): Promise<PushResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API}/message/push`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ to, messages: [{ type: "text", text }] }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return { ok: false, retryable: true, error: "network_error" };
   }
+
+  if (res.ok) return { ok: true };
+
+  const retryable = res.status === 429 || res.status >= 500;
+  return { ok: false, retryable, error: `line_push_failed_${res.status}` };
 }
 
 // Non-fatal team notification. Never throws: if LINE isn't configured yet,
