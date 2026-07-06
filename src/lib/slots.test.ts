@@ -115,7 +115,10 @@ assert.deepEqual(
   { ok: false, error: "not_confirmable" },
 );
 
-// --- confirm: lapsed hold needs a free seat ---------------------------------
+// --- confirm: a lapsed hold can NEVER be confirmed, even with room ----------
+// Payment Hold Safety: once hold_expires_at has passed, transition_slot_booking
+// rejects with 'hold_expired' regardless of remaining capacity — no more
+// "late payment, manual review while there's room" allowance.
 {
   const fullOthers: BookingLike[] = [
     { status: "confirmed" },
@@ -124,10 +127,13 @@ assert.deepEqual(
     { status: "confirmed" },
   ];
   const lapsed: BookingLike = { status: "pending_payment", hold_expires_at: past };
-  // Its hold lapsed and the slot is otherwise full → cannot confirm.
-  assert.deepEqual(canConfirm(lapsed, fullOthers, 4), { ok: false, error: "slot_full" });
-  // But if there's room, a lapsed hold can still be confirmed.
-  assert.equal(canConfirm(lapsed, fullOthers.slice(0, 3), 4).ok, true);
+  assert.deepEqual(canConfirm(lapsed, fullOthers, 4), { ok: false, error: "hold_expired" });
+  // Even with plenty of room, a lapsed hold still cannot be confirmed.
+  assert.deepEqual(canConfirm(lapsed, fullOthers.slice(0, 3), 4), { ok: false, error: "hold_expired" });
+  // A pending_payment booking with no hold_expires_at at all is treated the
+  // same as lapsed (never occupies, never confirmable).
+  const noHold: BookingLike = { status: "pending_payment", hold_expires_at: null };
+  assert.deepEqual(canConfirm(noHold, [], 4), { ok: false, error: "hold_expired" });
 }
 
 // --- state transition matrix (mirrors transition_slot_booking) --------------

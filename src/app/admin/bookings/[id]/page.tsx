@@ -8,6 +8,7 @@ import { SLOT_TRANSITIONS } from "@/lib/slots";
 import { TRANSITION_ERROR_TH, type TransitionErrorCode } from "@/lib/confirm-error";
 import { getPaymentOrdersForBooking } from "@/lib/payments/payment-orders";
 import type { PaymentOrder } from "@/lib/payments/types";
+import { ConfirmPaymentButton } from "../../_components/ConfirmPaymentButton";
 
 // Legacy/manual (non-slot) bookings can be set to these directly.
 const LEGACY_STATUSES = ["pending", "contacted", "confirmed", "cancelled"] as const;
@@ -170,20 +171,40 @@ export default async function BookingDetail({
         {booking.slot_id ? (
           // Slot booking: only valid transitions, via the state machine.
           <div className="flex flex-wrap gap-2">
-            {(SLOT_TRANSITIONS[booking.status] ?? []).map((to) => (
-              <form key={to} action={transitionSlotBooking}>
-                <input type="hidden" name="bookingId" value={booking.id} />
-                <input type="hidden" name="to" value={to} />
-                <input
-                  type="hidden"
-                  name="redirectTo"
-                  value={`/admin/bookings/${booking.id}`}
+            {(SLOT_TRANSITIONS[booking.status] ?? []).map((to) =>
+              // pending_payment -> confirmed must go through the same
+              // hardened confirmPayment() path as /admin/day, which
+              // fast-fails on an expired hold before ever calling the RPC.
+              // The generic transitionSlotBooking form below has no such
+              // check and relies solely on the DB-level guard added in
+              // 0008_reject_expired_hold_confirmation.sql, which is not yet
+              // applied to production — so this specific transition must
+              // never go through the generic form.
+              booking.status === "pending_payment" && to === "confirmed" ? (
+                <ConfirmPaymentButton
+                  key={to}
+                  bookingId={booking.id}
+                  nickname={booking.nickname}
+                  phone={booking.phone}
+                  slotInfo={null}
+                  refCode={booking.id.slice(0, 8).toUpperCase()}
+                  redirectTo={`/admin/bookings/${booking.id}`}
                 />
-                <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50">
-                  {TRANSITION_LABEL[to] ?? to}
-                </button>
-              </form>
-            ))}
+              ) : (
+                <form key={to} action={transitionSlotBooking}>
+                  <input type="hidden" name="bookingId" value={booking.id} />
+                  <input type="hidden" name="to" value={to} />
+                  <input
+                    type="hidden"
+                    name="redirectTo"
+                    value={`/admin/bookings/${booking.id}`}
+                  />
+                  <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-50">
+                    {TRANSITION_LABEL[to] ?? to}
+                  </button>
+                </form>
+              ),
+            )}
             {(SLOT_TRANSITIONS[booking.status] ?? []).length === 0 && (
               <p className="text-sm text-gray-400">สถานะนี้สิ้นสุดแล้ว</p>
             )}

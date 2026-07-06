@@ -68,20 +68,27 @@ export function isSlotFull(
   return remainingSeats(capacity, bookings, now) <= 0;
 }
 
-// Mirrors confirm_booking() in 0002_booking_slots.sql. A live pending_payment
-// hold already occupies its seat, so confirming it never needs an extra seat
-// (succeeds even when the slot is exactly full). A lapsed hold must find room.
+// Mirrors transition_slot_booking() in 0008_reject_expired_hold_confirmation.sql.
+// A live pending_payment hold already occupies its seat, so confirming it
+// never needs an extra seat (succeeds even when the slot is exactly full). A
+// lapsed hold can NEVER be confirmed — not even if the slot has room —
+// because the hold deadline is the customer-facing promise that payment
+// instructions are still valid; admins must not confirm a payment against an
+// expired hold, they must ask the customer to book again.
 export function canConfirm(
   self: BookingLike,
   others: BookingLike[],
   capacity: number,
   now: number = Date.now(),
-): { ok: true } | { ok: false; error: "not_confirmable" | "slot_full" } {
+): { ok: true } | { ok: false; error: "not_confirmable" | "slot_full" | "hold_expired" } {
   if (self.status === "confirmed") return { ok: true }; // idempotent
   if (self.status === "cancelled" || self.status === "expired") {
     return { ok: false, error: "not_confirmable" };
   }
   if (occupies(self, now)) return { ok: true }; // already holds a seat
+  if (self.status === "pending_payment") {
+    return { ok: false, error: "hold_expired" };
+  }
   if (countOccupied(others, now) >= capacity) {
     return { ok: false, error: "slot_full" };
   }
