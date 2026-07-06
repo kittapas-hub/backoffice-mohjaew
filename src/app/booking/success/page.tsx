@@ -1,9 +1,8 @@
 import Link from "next/link";
 import { getBookingByToken, type BookingTokenData } from "@/lib/booking-core";
 import { paymentConfig } from "@/lib/env";
-import { CopyButton } from "./CopyButton";
 import { HoldCountdown } from "./HoldCountdown";
-import { LineCta } from "./LineCta";
+import { PaymentInstructions } from "./PaymentInstructions";
 import { buildLineHref, buildLinePrefill } from "./helpers";
 
 export const dynamic = "force-dynamic";
@@ -132,8 +131,9 @@ export default async function BookingSuccess({
 
   // ── pending_payment: show full payment instructions ────────────────────────
   const cfg = paymentConfig();
-  const hasPaymentConfig =
-    cfg.amount && cfg.bankName && cfg.accountName && cfg.accountNumber;
+  const hasPaymentConfig = Boolean(
+    cfg.amount && cfg.bankName && cfg.accountName && cfg.accountNumber,
+  );
   const hasQR = Boolean(cfg.qrPath);
   const qrSrc = cfg.qrPath.startsWith("/") ? cfg.qrPath : `/${cfg.qrPath}`;
   const deadline = formatThaiDeadline(booking.holdExpiresAt);
@@ -185,57 +185,18 @@ export default async function BookingSuccess({
       <div className="mb-5 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
         <h2 className="mb-4 font-bold">ขั้นตอนชำระเงิน</h2>
 
-        {hasPaymentConfig ? (
-          <>
-            <p className="mb-1 text-center text-3xl font-bold text-rose-700">
-              {Number(cfg.amount).toLocaleString("th-TH")}{" "}
-              <span className="text-lg font-medium">บาท</span>
-            </p>
-            <p className="mb-4 text-center text-sm text-gray-600">
-              โอนยอดเต็มจำนวน แล้วส่งสลิปพร้อมเลขอ้างอิงด้านล่าง
-            </p>
-
-            {hasQR && (
-              <div className="mb-5 flex justify-center">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={qrSrc}
-                  alt="QR Code สำหรับโอนเงิน"
-                  width={220}
-                  height={220}
-                  className="rounded-xl border border-gray-200"
-                />
-              </div>
-            )}
-
-            <dl className="mb-5 space-y-3">
-              <Row label="ธนาคาร" value={cfg.bankName} />
-              <Row label="ชื่อบัญชี" value={cfg.accountName} />
-              <Row
-                label="เลขบัญชี"
-                value={cfg.accountNumber}
-                action={
-                  <CopyButton text={cfg.accountNumber} label="คัดลอก" />
-                }
-              />
-              <Row
-                label="เลขอ้างอิง"
-                value={booking.reference}
-                action={
-                  <CopyButton text={booking.reference} label="คัดลอก" />
-                }
-              />
-            </dl>
-
-            {lineHref && (
-              <LineCta href={lineHref} expiresAt={booking.holdExpiresAt} />
-            )}
-          </>
-        ) : (
-          <p className="rounded-lg bg-gray-50 p-4 text-sm text-gray-700">
-            ทีมงานจะติดต่อเพื่อแจ้งรายละเอียดการชำระเงิน
-          </p>
-        )}
+        <PaymentInstructions
+          holdExpiresAt={booking.holdExpiresAt}
+          hasPaymentConfig={hasPaymentConfig}
+          hasQR={hasQR}
+          qrSrc={qrSrc}
+          amount={cfg.amount}
+          bankName={cfg.bankName}
+          accountName={cfg.accountName}
+          accountNumber={cfg.accountNumber}
+          reference={booking.reference}
+          lineHref={lineHref}
+        />
       </div>
 
       <Link

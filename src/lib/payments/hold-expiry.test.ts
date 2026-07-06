@@ -155,31 +155,46 @@ assert.match(
 );
 
 // ===========================================================================
-// BookingStatusPanel.tsx: client-side hold-expiry safety.
+// PaymentInstructions.tsx: client-side hold-expiry safety.
+//
+// This branch is intentionally NOT src/app/booking/success/BookingStatusPanel.tsx
+// — that file (and the polling redesign it was part of) never existed in any
+// committed history; it only ever existed as uncommitted work in a different,
+// dirty worktree. This branch's committed success page is the older,
+// server-rendered-only architecture (page.tsx re-fetches booking status fresh
+// on every load; no client polling exists here), so the hold-expiry guard is
+// implemented as a small new client component, PaymentInstructions.tsx,
+// wired into the existing page.tsx.
 // ===========================================================================
-const panelSrc = readSrc("app/booking/success/BookingStatusPanel.tsx");
+const panelSrc = readSrc("app/booking/success/PaymentInstructions.tsx");
 
-// A local holdExpired flag, driven only by props.holdExpiresAt vs Date.now().
+assert.match(panelSrc, /^"use client";/, "must be a client component");
+
+// A local holdExpired flag, driven only by the holdExpiresAt prop vs Date.now().
 assert.match(
   panelSrc,
-  /new Date\(props\.holdExpiresAt!\)\.getTime\(\)\s*<=\s*Date\.now\(\)/,
-  "must compute hold expiry from props.holdExpiresAt vs the client clock",
+  /new Date\(holdExpiresAt\)\.getTime\(\)\s*<=\s*Date\.now\(\)/,
+  "must compute hold expiry from the holdExpiresAt prop vs the client clock",
+);
+assert.match(
+  panelSrc,
+  /setInterval\(check,\s*1000\)/,
+  "must re-check expiry on an interval (matches HoldCountdown's 1s cadence)",
 );
 
-// The payment-instructions branch must be gated on holdExpired, ahead of
-// hasPaymentConfig, so QR/bank/reference/copy/LINE CTA are all replaced by
-// the same expiry message.
-const paymentSectionStart = panelSrc.indexOf('ขั้นตอนชำระเงิน');
-const paymentSection = panelSrc.slice(paymentSectionStart);
-assert.match(
-  paymentSection,
-  /\{holdExpired \? \(/,
-  "payment section must branch on holdExpired first",
+// The holdExpired early-return must come first, before the hasPaymentConfig
+// branch, so QR/bank/reference/copy/LINE CTA are all replaced by the same
+// expiry message once the hold has lapsed.
+const holdExpiredIdx = panelSrc.indexOf("if (holdExpired)");
+const hasPaymentConfigIdx = panelSrc.indexOf("if (!hasPaymentConfig)");
+assert.ok(holdExpiredIdx > -1, "must have an if (holdExpired) branch");
+assert.ok(hasPaymentConfigIdx > -1, "must have an if (!hasPaymentConfig) branch");
+assert.ok(
+  holdExpiredIdx < hasPaymentConfigIdx,
+  "holdExpired check must be evaluated before the hasPaymentConfig check",
 );
-const expiredBlock = paymentSection.slice(
-  paymentSection.indexOf("{holdExpired ? ("),
-  paymentSection.indexOf(") : props.hasPaymentConfig"),
-);
+
+const expiredBlock = panelSrc.slice(holdExpiredIdx, hasPaymentConfigIdx);
 assert.match(expiredBlock, /หมดเวลาถือคิวแล้ว/, "must show the Thai hold-expired heading");
 assert.match(
   expiredBlock,
@@ -196,20 +211,52 @@ assert.match(
   /จองคิวใหม่/,
   "must offer a path to make a new booking",
 );
-assert.doesNotMatch(expiredBlock, /qrSrc|accountNumber|CopyButton|LineCta/, "expired block must not render any payment instruction");
-
-// The non-expired branch (props.hasPaymentConfig true) must be unchanged:
-// QR, bank details, reference, copy buttons, and the LINE CTA still render
-// normally when the hold has not expired.
-const notExpiredBlock = paymentSection.slice(
-  paymentSection.indexOf(") : props.hasPaymentConfig"),
-  paymentSection.indexOf(") : (", paymentSection.indexOf(") : props.hasPaymentConfig") + 1),
+assert.doesNotMatch(
+  expiredBlock,
+  /qrSrc|accountNumber|CopyButton|LineCta/,
+  "expired block must not render any payment instruction",
 );
-assert.match(notExpiredBlock, /props\.qrSrc/, "QR image must still render before expiry");
-assert.match(notExpiredBlock, /props\.accountNumber/, "account number must still render before expiry");
-assert.match(notExpiredBlock, /props\.reference/, "reference must still render before expiry");
+
+// The remainder (non-expired, hasPaymentConfig true) must be unchanged: QR,
+// bank details, reference, copy buttons, and the LINE CTA still render
+// normally when the hold has not expired.
+const notExpiredBlock = panelSrc.slice(hasPaymentConfigIdx);
+assert.match(notExpiredBlock, /qrSrc/, "QR image must still render before expiry");
+assert.match(notExpiredBlock, /accountNumber/, "account number must still render before expiry");
+assert.match(notExpiredBlock, /reference/, "reference must still render before expiry");
 assert.match(notExpiredBlock, /CopyButton/, "copy buttons must still render before expiry");
 assert.match(notExpiredBlock, /LineCta/, "LINE CTA must still render before expiry");
+
+// page.tsx must actually wire this component in (not just define it unused),
+// passing the booking's real, server-fetched holdExpiresAt — never a
+// client-supplied value — and must no longer inline the payment-instructions
+// JSX itself (that logic now lives solely in PaymentInstructions.tsx).
+const successPageSrc = readSrc("app/booking/success/page.tsx");
+assert.match(
+  successPageSrc,
+  /import \{ PaymentInstructions \} from ["']\.\/PaymentInstructions["']/,
+  "page.tsx must import PaymentInstructions",
+);
+assert.match(
+  successPageSrc,
+  /<PaymentInstructions[\s\S]*?holdExpiresAt=\{booking\.holdExpiresAt\}/,
+  "page.tsx must pass the booking's own server-fetched holdExpiresAt",
+);
+assert.doesNotMatch(
+  successPageSrc,
+  /CopyButton|LineCta/,
+  "page.tsx must no longer directly render CopyButton/LineCta — that now lives inside PaymentInstructions",
+);
+
+// The server-rendered terminal-status branch (confirmed/booked/cancelled/
+// expired/completed) is untouched: it returns before PaymentInstructions is
+// ever reached, so a locally-computed client expiry can never contradict a
+// real server-confirmed status — there's no shared state to overwrite.
+assert.match(
+  successPageSrc,
+  /if \(booking\.status !== "pending_payment"\)/,
+  "terminal-status branch must still gate on the server-fetched status before rendering payment instructions",
+);
 
 // ===========================================================================
 // Booking-detail admin route (/admin/bookings/[id]): the expired-hold
