@@ -161,11 +161,20 @@ const NOW = Date.now();
     true,
     "live hold in a full slot confirms without needing an extra seat",
   );
-  // A lapsed hold in a full slot cannot be confirmed.
+  // Payment Hold Safety (0008_reject_expired_hold_confirmation.sql): a lapsed
+  // hold can NEVER be confirmed, even with room to spare — the previous
+  // "late payment, manual review" allowance is intentionally removed so the
+  // customer-facing hold deadline is a real guarantee.
   const past = new Date(NOW - 60_000).toISOString();
   assert.deepEqual(
     canConfirm({ status: "pending_payment", hold_expires_at: past }, [...full, { status: "confirmed" }], 3, NOW),
-    { ok: false, error: "slot_full" },
+    { ok: false, error: "hold_expired" },
+    "lapsed hold cannot be confirmed even in a full slot",
+  );
+  assert.deepEqual(
+    canConfirm({ status: "pending_payment", hold_expires_at: past }, [], 3, NOW),
+    { ok: false, error: "hold_expired" },
+    "lapsed hold cannot be confirmed even with plenty of room",
   );
 }
 

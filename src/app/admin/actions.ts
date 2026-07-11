@@ -39,8 +39,12 @@ export async function transitionSlotBooking(formData: FormData) {
 
 // Hardened action for manual payment confirmation only.
 // Target status is hardcoded server-side — the client never supplies it.
-// Rejects if the booking is not currently pending_payment (fast-fail before
-// the RPC, which enforces the same rule atomically with a row lock).
+// Rejects if the booking is not currently pending_payment, or if its hold
+// has already lapsed (fast-fail before the RPC, which enforces both rules
+// atomically with a row lock using the DB's own clock — see hold_expired in
+// transition_slot_booking, 0008_reject_expired_hold_confirmation.sql). This
+// fast-fail check is a UX shortcut only; the RPC is the real invariant and
+// is never bypassed even if this check is skewed by clock drift.
 export async function confirmPayment(formData: FormData) {
   await requireAdmin();
   const id = String(formData.get("bookingId") ?? "");
@@ -51,13 +55,20 @@ export async function confirmPayment(formData: FormData) {
 
   const { data: booking } = await db
     .from("bookings")
-    .select("status, slot_id")
+    .select("status, slot_id, hold_expires_at")
     .eq("id", id)
     .maybeSingle();
 
   if (booking?.status !== "pending_payment" || !booking.slot_id) {
     const sep = redirectTo.includes("?") ? "&" : "?";
     redirect(`${redirectTo}${sep}error=invalid_transition`);
+  }
+  if (
+    !booking.hold_expires_at ||
+    new Date(booking.hold_expires_at).getTime() <= Date.now()
+  ) {
+    const sep = redirectTo.includes("?") ? "&" : "?";
+    redirect(`${redirectTo}${sep}error=hold_expired`);
   }
 
   const { error } = await db.rpc("transition_slot_booking", {

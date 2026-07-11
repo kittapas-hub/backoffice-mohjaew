@@ -61,7 +61,7 @@ for (const [file, names] of Object.entries(actionFiles)) {
   );
   assert.match(
     body,
-    /\.from\(\s*["']bookings["']\s*\)[\s\S]*?\.select\(\s*["']status, slot_id["']\s*\)[\s\S]*?\.maybeSingle\(\)/,
+    /\.from\(\s*["']bookings["']\s*\)[\s\S]*?\.select\(\s*["']status, slot_id, hold_expires_at["']\s*\)[\s\S]*?\.maybeSingle\(\)/,
     "confirmPayment must first load an existing booking",
   );
   assert.match(
@@ -73,6 +73,19 @@ for (const [file, names] of Object.entries(actionFiles)) {
     body,
     /!booking\.slot_id/,
     "confirmPayment must reject a pending_payment record without a slot",
+  );
+  // Payment Hold Safety: reject a lapsed hold using the booking's own
+  // persisted hold_expires_at compared against the server clock — never a
+  // client-supplied time or expiry value.
+  assert.match(
+    body,
+    /new Date\(booking\.hold_expires_at\)\.getTime\(\)\s*<=\s*Date\.now\(\)/,
+    "confirmPayment must reject a booking whose hold_expires_at has passed",
+  );
+  assert.doesNotMatch(
+    body,
+    /formData\.get\(["'](holdExpiresAt|now|expiresAt)["']\)/,
+    "confirmPayment must never read a client-supplied expiry/time value",
   );
   assert.doesNotMatch(
     body,
