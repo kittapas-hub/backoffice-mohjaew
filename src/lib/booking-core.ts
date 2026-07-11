@@ -6,6 +6,9 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
 import { notifyTeamSafe, notifyTeamImageSafe } from "@/lib/line";
 import {
+  filterCustomerAvailableSlots,
+} from "@/lib/slot-seeding";
+import {
   paymentHoldMinutes,
   validateBookingInput,
   type BookingInput,
@@ -242,8 +245,8 @@ export async function recordRateHit(
   return (data as number) ?? -1;
 }
 
-// Open slots for a date that still have seats. Clears stale holds first
-// (the SQL function calls expire_pending_bookings) so counts aren't stale.
+/** Customer-facing filter: seats left, and post-cutover dates show only the
+ *  four canonical session windows (never hourly + session together). */
 export async function getAvailableSlots(date: string): Promise<OpenSlot[]> {
   const db = supabaseAdmin();
   const { data, error } = await db.rpc("get_open_slots", { p_date: date });
@@ -251,5 +254,5 @@ export async function getAvailableSlots(date: string): Promise<OpenSlot[]> {
     console.error("get_open_slots failed", error);
     return [];
   }
-  return ((data ?? []) as OpenSlot[]).filter((s) => s.remaining > 0);
+  return filterCustomerAvailableSlots(date, (data ?? []) as OpenSlot[]);
 }

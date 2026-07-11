@@ -1,23 +1,68 @@
 // Shared, idempotent slot-seeding logic. Seed-only: never creates a booking,
 // never overwrites an existing slot's capacity/is_open/label. Both the admin
-// "สร้างรอบรายชั่วโมง" action and the ensure-slot-horizon cron call this.
+// "สร้างรอบเซสชัน" action and the ensure-slot-horizon cron call this.
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-// Default bookable units are hourly slots, 09:00–21:00 (12 slots/day). Kept
-// here as the single source so no caller can define a second, divergent list.
-export const DEFAULT_HOURLY_SLOTS = Array.from({ length: 12 }, (_, i) => {
-  const startHour = 9 + i;
-  const endHour = startHour + 1;
-  const start = `${String(startHour).padStart(2, "0")}:00`;
-  const end = `${String(endHour).padStart(2, "0")}:00`;
-  return {
-    start_time: start,
-    end_time: end,
-    label: `${start}–${end}`,
-  };
-});
+/** Bangkok calendar date when customer availability switches to session windows.
+ *  Must match supabase/migrations/0009_queue_session_cutover.sql. */
+export const SESSION_CUTOVER_DATE = "2026-07-12";
 
-export const DEFAULT_SLOT_CAPACITY = 1;
+export type SessionSlotDef = {
+  start_time: string;
+  end_time: string;
+  label: string;
+  capacity: number;
+};
+
+// Four canonical consultation sessions per Bangkok calendar day. Kept here as
+// the single source so no caller can define a second, divergent list.
+export const DEFAULT_SESSION_SLOTS: readonly SessionSlotDef[] = [
+  {
+    start_time: "09:00",
+    end_time: "12:00",
+    label: "09:00–12:00 (เช้า)",
+    capacity: 5,
+  },
+  {
+    start_time: "13:00",
+    end_time: "16:00",
+    label: "13:00–16:00 (บ่าย)",
+    capacity: 5,
+  },
+  {
+    start_time: "18:00",
+    end_time: "21:00",
+    label: "18:00–21:00 (เย็น)",
+    capacity: 5,
+  },
+  {
+    start_time: "22:00",
+    end_time: "23:00",
+    label: "22:00–23:00 (พิเศษ)",
+    capacity: 2,
+  },
+] as const;
+
+const CANONICAL_SESSION_KEYS = new Set(
+  DEFAULT_SESSION_SLOTS.map((s) => `${s.start_time}-${s.end_time}`),
+);
+
+/** Normalize Postgres `time` / API strings to HH:MM for comparison. */
+export function normalizeSlotTime(t: string): string {
+  return t.slice(0, 5);
+}
+
+/** True when (start_time, end_time) is one of the four canonical session windows. */
+export function isCanonicalSessionSlot(startTime: string, endTime: string): boolean {
+  return CANONICAL_SESSION_KEYS.has(
+    `${normalizeSlotTime(startTime)}-${normalizeSlotTime(endTime)}`,
+  );
+}
+
+/** True on/after SESSION_CUTOVER_DATE (Bangkok YYYY-MM-DD, lexicographic). */
+export function isSessionCutoverDate(date: string): boolean {
+  return date >= SESSION_CUTOVER_DATE;
+}
 
 // Customer guarantee: at least this many calendar days are always selectable
 // on /booking (Bangkok today .. today + CUSTOMER_HORIZON_DAYS - 1).
@@ -26,15 +71,16 @@ export const CUSTOMER_HORIZON_DAYS = 30;
 // Seeded buffer: the cron seeds one extra day beyond the customer guarantee
 // (today .. today + SEED_HORIZON_DAYS - 1, i.e. 31 dates inclusive) so the
 // horizon never shrinks below 30 selectable days between Bangkok local
-// midnight and the next 04:10 Bangkok cron run. The schedule itself is
-// unchanged — this only widens what a single run seeds.
+// midnight and the next 04:10 Bangkok cron run.
 export const SEED_HORIZON_DAYS = CUSTOMER_HORIZON_DAYS + 1;
 
 function defaultSlotRows(date: string) {
-  return DEFAULT_HOURLY_SLOTS.map((r) => ({
-    ...r,
+  return DEFAULT_SESSION_SLOTS.map((r) => ({
     booking_date: date,
-    capacity: DEFAULT_SLOT_CAPACITY,
+    start_time: r.start_time,
+    end_time: r.end_time,
+    label: r.label,
+    capacity: r.capacity,
   }));
 }
 
@@ -52,6 +98,17 @@ export function horizonDates(startDate: string, days: number = CUSTOMER_HORIZON_
   );
 }
 
+/** Customer-facing filter: seats left; post-cutover dates show only canonical sessions. */
+export function filterCustomerAvailableSlots<
+  T extends { start_time: string; end_time: string; remaining: number },
+>(date: string, slots: T[]): T[] {
+  const open = slots.filter((s) => s.remaining > 0);
+  if (!isSessionCutoverDate(date)) return open;
+  return open.filter((s) =>
+    isCanonicalSessionSlot(String(s.start_time), String(s.end_time)),
+  );
+}
+
 // Idempotent: ON CONFLICT DO NOTHING on the (booking_date, start_time,
 // end_time) unique key means re-seeding a date is always a safe no-op —
 // existing capacity/is_open/label are never touched.
@@ -63,10 +120,7 @@ export async function seedSlotsForDate(db: SupabaseClient, date: string): Promis
 }
 
 // Seeds the rolling horizon (Bangkok today .. today + days - 1) with default
-// slots. Only inserts what's missing; existing slots are left untouched.
-// Defaults to SEED_HORIZON_DAYS (31 dates: today .. today+30) so the
-// CUSTOMER_HORIZON_DAYS (30-day) guarantee holds continuously even right
-// before the next daily run.
+// session slots. Only inserts what's missing; existing slots are left untouched.
 export async function ensureSlotHorizon(
   db: SupabaseClient,
   now: Date = new Date(),

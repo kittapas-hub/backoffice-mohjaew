@@ -311,9 +311,11 @@ assert.match(
 );
 assert.doesNotMatch(dayActions, /length:\s*12/, "day actions must not define its own hardcoded slot list");
 const slotSeedingSrc = read("lib/slot-seeding.ts");
-assert.match(slotSeedingSrc, /length:\s*12/, "default day should seed 12 hourly slots");
-assert.match(slotSeedingSrc, /DEFAULT_SLOT_CAPACITY\s*=\s*1/, "default hourly slot capacity should be 1");
-assert.doesNotMatch(slotSeedingSrc, /09:00["'`],\s*end_time:\s*["'`]12:00/, "must not seed legacy 3-hour morning slot");
+assert.match(slotSeedingSrc, /DEFAULT_SESSION_SLOTS/, "default day should seed canonical session slots");
+assert.match(slotSeedingSrc, /capacity:\s*5/, "main sessions default to capacity 5");
+assert.match(slotSeedingSrc, /capacity:\s*2/, "special session default capacity is 2");
+assert.match(slotSeedingSrc, /09:00["'`],\s*end_time:\s*["'`]12:00/, "morning session 09:00–12:00 is intentional");
+assert.match(slotSeedingSrc, /SESSION_CUTOVER_DATE/, "cutover date must be documented in seeding module");
 
 // --- 5. POST /api/bookings guards -------------------------------------------
 const bookingsRoute = read("app/api/bookings/route.ts");

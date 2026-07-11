@@ -88,7 +88,7 @@ export default function BookingForm({
     e.preventDefault();
     setError(null);
     if (!slotId) {
-      setError("กรุณาเลือกรอบเวลา");
+      setError("กรุณาเลือกรอบเซสชัน");
       return;
     }
     if (!faceFile) {
@@ -192,13 +192,13 @@ export default function BookingForm({
       <section className="booking-section">
         <h2 className="booking-section-title">
           <span className="booking-step">2</span>
-          เลือกรอบเวลา
+          เลือกรอบเซสชัน
         </h2>
         {loadingSlots ? (
           <p className="booking-alert booking-alert-muted">กำลังโหลดรอบที่ว่าง...</p>
         ) : slots.length === 0 ? (
           <p className="booking-alert booking-alert-muted">
-            วันนี้ยังไม่มีรอบที่เปิดรับจอง กรุณาเลือกวันอื่น
+            วันนี้ยังไม่มีรอบเซสชันที่เปิดรับจอง กรุณาเลือกวันอื่น
           </p>
         ) : (
           <div className="booking-slots">
@@ -221,6 +221,10 @@ export default function BookingForm({
             ))}
           </div>
         )}
+        <p className="booking-help" style={{ marginTop: 10 }}>
+          รอบเซสชันเป็นเวลาโดยประมาณ ไม่ใช่เวลาโทรที่แน่นอน ทีมงานจะติดต่อตามลำดับคิว
+          และการปรึกษาอาจใช้เวลานานกว่ารอบที่แสดง
+        </p>
       </section>
 
       <section className="booking-section">
