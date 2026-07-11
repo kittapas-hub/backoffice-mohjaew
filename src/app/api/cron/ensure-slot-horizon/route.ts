@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 // Ensures customers always see at least 30 selectable calendar days on
 // /booking by seeding a 31-date buffer (Bangkok today .. today+30) with
-// default hourly slots — one day beyond the 30-day guarantee so the horizon
+// default session slots — one day beyond the 30-day guarantee so the horizon
 // never shrinks below 30 between Bangkok local midnight and this cron's next
 // 04:10 Bangkok run. Seed-only: creates no booking records, never overwrites
 // an existing slot's capacity/is_open/label, never deletes anything.

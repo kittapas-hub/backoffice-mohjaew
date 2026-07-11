@@ -153,6 +153,11 @@ assert.match(
 // ===========================================================================
 assert.match(
   panelSrc,
+  /ลำดับคิวนี้คือลำดับการจองในรอบเซสชัน/,
+  "pending_payment view must clarify queue is session order not exact appointment time",
+);
+assert.match(
+  panelSrc,
   /คิวของคุณจะยืนยันก็ต่อเมื่อทีมงานตรวจสอบการชำระเงินแล้วเท่านั้น/,
   "pending_payment view must clarify manual team verification is required to confirm",
 );

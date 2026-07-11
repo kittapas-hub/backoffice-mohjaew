@@ -80,6 +80,31 @@ function createBooking(
 
 const NOW = Date.now();
 
+// --- capacity 5: five occupants allowed, sixth active booking rejected ---------
+{
+  const rows: Row[] = [];
+  for (let i = 1; i <= 5; i++) {
+    const r = createBooking(rows, {
+      slotId: "s1",
+      phone: `081000000${i}`,
+      idempotencyKey: `k-${i}`,
+      capacity: 5,
+      now: NOW,
+    });
+    assert.equal(r.ok, true, `booking ${i} should succeed`);
+    if (r.ok) assert.equal(r.booking.queue_number, i);
+  }
+  assert.equal(countOccupied(rows, NOW), 5);
+  const sixth = createBooking(rows, {
+    slotId: "s1",
+    phone: "0810000006",
+    idempotencyKey: "k-6",
+    capacity: 5,
+    now: NOW,
+  });
+  assert.deepEqual(sixth, { ok: false, error: "slot_full" }, "sixth active booking is rejected");
+}
+
 // --- race for the last seat: exactly one winner ------------------------------
 {
   const rows: Row[] = [];

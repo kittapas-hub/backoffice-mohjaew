@@ -93,7 +93,7 @@ export default async function DayView({
             <form action={seedDaySlots}>
               <input type="hidden" name="date" value={date} />
               <button className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium hover:bg-gray-50">
-                เติมรอบรายชั่วโมง
+                เติมรอบเซสชัน
               </button>
             </form>
           )}
@@ -128,11 +128,11 @@ export default async function DayView({
 
       {(!slots || slots.length === 0) && (
         <div className="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center">
-          <p className="mb-3 text-sm text-gray-500">ยังไม่มีรอบเวลาสำหรับวันนี้</p>
+          <p className="mb-3 text-sm text-gray-500">ยังไม่มีรอบเซสชันสำหรับวันนี้</p>
           <form action={seedDaySlots}>
             <input type="hidden" name="date" value={date} />
             <button className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white">
-              สร้างรอบรายชั่วโมง (09:00–21:00)
+              สร้างรอบเซสชัน (4 รอบ/วัน)
             </button>
           </form>
         </div>

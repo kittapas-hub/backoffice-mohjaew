@@ -93,7 +93,7 @@ export function BookingStatusPanel(props: {
         <dl className="mt-5 w-full space-y-3 rounded-2xl border border-gray-100 bg-white p-4 text-left shadow-sm">
           <Row label="เลขอ้างอิง" value={props.reference} strong />
           <Row label="วันที่" value={formatThaiDate(props.bookingDate)} />
-          <Row label="รอบเวลา" value={props.slotLabel ?? "-"} />
+          <Row label="รอบเซสชัน" value={props.slotLabel ?? "-"} />
         </dl>
         <Link
           href="/booking"
@@ -124,11 +124,15 @@ export function BookingStatusPanel(props: {
         <dl className="space-y-3">
           <Row label="เลขอ้างอิง" value={props.reference} strong />
           <Row label="วันที่" value={formatThaiDate(props.bookingDate)} />
-          <Row label="รอบเวลา" value={props.slotLabel ?? "-"} />
+          <Row label="รอบเซสชัน" value={props.slotLabel ?? "-"} />
           <Row
             label="ลำดับคิวในรอบ"
             value={props.queueNumber ? `#${props.queueNumber}` : "-"}
           />
+          <p className="text-xs text-gray-500">
+            ลำดับคิวนี้คือลำดับการจองในรอบเซสชัน ไม่ใช่เวลาโทรที่แน่นอน
+            ทีมงานจะติดต่อตามลำดับคิว
+          </p>
         </dl>
 
         {props.holdExpiresAt && (

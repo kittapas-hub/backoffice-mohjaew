@@ -23,8 +23,9 @@ export default async function BookingPage({
           <p className="booking-eyebrow">Mohjaew Booking</p>
           <h1 className="booking-title">จองคิวปรึกษาหมอแจว</h1>
           <p className="booking-subtitle">
-            เลือกวันและรอบเวลาที่สะดวก จากนั้นกรอกข้อมูลเพื่อถือคิวไว้ {holdMinutes} นาที
-            ระหว่างรอการชำระเงิน
+            เลือกวันและรอบเซสชันที่สะดวก จากนั้นกรอกข้อมูลเพื่อถือคิวไว้ {holdMinutes} นาที
+            ระหว่างรอการชำระเงิน รอบที่แสดงเป็นเวลาโดยประมาณของการปรึกษา
+            ไม่ใช่เวลาโทรที่แน่นอน — ทีมงานจะติดต่อตามลำดับคิว และการปรึกษาอาจใช้เวลานานกว่ารอบที่แสดง
           </p>
         </header>
         <BookingForm source={validSource} holdMinutes={holdMinutes} />
