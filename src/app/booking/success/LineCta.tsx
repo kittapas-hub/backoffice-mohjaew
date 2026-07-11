@@ -30,14 +30,19 @@ export function LineCta({
   }
 
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-500 px-4 py-3 text-base font-semibold text-white shadow-sm hover:bg-green-600 active:bg-green-700"
-    >
-      <span>💬</span>
-      ส่งสลิปผ่าน LINE
-    </a>
+    <>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-500 px-4 py-3 text-base font-semibold text-white shadow-sm hover:bg-green-600 active:bg-green-700"
+      >
+        <span>💬</span>
+        ส่งสลิปทาง LINE @mohjaew
+      </a>
+      <p className="mt-2 hidden text-center text-xs text-gray-400 sm:block">
+        แนะนำให้เปิดผ่านมือถือเพื่อส่งสลิปใน LINE ได้สะดวก
+      </p>
+    </>
   );
 }
