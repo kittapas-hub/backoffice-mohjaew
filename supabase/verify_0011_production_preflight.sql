@@ -5,11 +5,11 @@
 -- does not invoke application functions or return customer, booking, payment,
 -- notification, or slip rows.
 --
--- Source provenance is a repository gate, not a database capability. The
--- supplied commit below is intentionally reported as FAIL: it is not a valid
--- commit in the reviewed checkout. The reviewed migration is instead blob
--- ab1d75b1aba70f181818cf88c9d08c641abe82c4 in commit
--- 6af8356eae317393403a4fc6780e53596489d08b.
+-- Source provenance is a repository gate, not a database capability.
+-- source_provenance PASSes when the supplied commit matches the reviewed
+-- commit 6af8356eae317393403a4fc6780e53596489d08b and the migration Git blob
+-- matches ab1d75b1aba70f181818cf88c9d08c641abe82c4. working_tree_sha256 is
+-- diagnostic evidence only and does not gate PASS/FAIL.
 
 with
 source_provenance_facts as (
