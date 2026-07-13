@@ -312,21 +312,46 @@ claim_team_notification_deliveries_check as (
   from claim_team_notification_deliveries_lookup
 ),
 
--- Neither slip-verification RPC may reference a customer-channel recipient.
+-- Neither slip-verification RPC may assign a customer-channel recipient.
 -- Fails closed (false) if either function is missing entirely, matching the
 -- fail-closed convention used throughout this script.
+--
+-- SQL line (--) and block (/* */) comments are stripped from the function
+-- source before inspection, and the search targets the quoted text literal
+-- 'customer' rather than the bare word "customer". This avoids two known
+-- false-positive sources: a source comment merely mentioning the word
+-- "customer" (e.g. explaining why a channel is out of scope), and the
+-- unquoted recipient_type column identifier, which can never match a
+-- quoted string-literal search.
+no_customer_recipient_source as (
+  select
+    to_regprocedure(
+      'public.confirm_slip_payment(uuid,text,text,timestamptz,integer,text,text,jsonb)'
+    ) as confirm_oid,
+    to_regprocedure('public.approve_manual_review_payment(uuid)') as approve_oid
+),
+no_customer_recipient_stripped as (
+  select
+    confirm_oid,
+    approve_oid,
+    regexp_replace(
+      regexp_replace(pg_get_functiondef(confirm_oid), '/\*.*?\*/', '', 'gs'),
+      '--[^\n]*', '', 'g'
+    ) as confirm_stripped,
+    regexp_replace(
+      regexp_replace(pg_get_functiondef(approve_oid), '/\*.*?\*/', '', 'gs'),
+      '--[^\n]*', '', 'g'
+    ) as approve_stripped
+  from no_customer_recipient_source
+),
 no_customer_recipient_in_functions as (
   select
-    coalesce(
-      position('customer' in pg_get_functiondef(to_regprocedure(
-        'public.confirm_slip_payment(uuid,text,text,timestamptz,integer,text,text,jsonb)'
-      ))) = 0, false
-    )
-    and coalesce(
-      position('customer' in pg_get_functiondef(to_regprocedure(
-        'public.approve_manual_review_payment(uuid)'
-      ))) = 0, false
-    ) as pass
+    confirm_oid is not null
+      and approve_oid is not null
+      and coalesce(position('''customer''' in confirm_stripped) = 0, false)
+      and coalesce(position('''customer''' in approve_stripped) = 0, false)
+      as pass
+  from no_customer_recipient_stripped
 ),
 no_customer_recipient_in_data as (
   select count(*) as violation_count
