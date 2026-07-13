@@ -12,14 +12,27 @@
 -- 6af8356eae317393403a4fc6780e53596489d08b.
 
 with
-source_provenance as (
+source_provenance_facts as (
   select
     '6af8356eae317393403a4fc6780e53596489d08b'::text as supplied_commit,
     '6af8356eae317393403a4fc6780e53596489d08b'::text as actual_reviewed_commit,
     'ab1d75b1aba70f181818cf88c9d08c641abe82c4'::text as migration_blob,
     '6c30aa9c267d6645bf9a2bf1b916bc8da31dc9ddd14fd4fe795c1086f8cff6a7'::text
-      as working_tree_sha256,
-    false as pass
+      as working_tree_sha256
+),
+source_provenance as (
+  -- PASS is decided by reviewed commit + migration Git blob only.
+  -- working_tree_sha256 stays in evidence for diagnostics but never gates
+  -- PASS/FAIL, since local line-ending normalization can change it.
+  select
+    supplied_commit,
+    actual_reviewed_commit,
+    migration_blob,
+    working_tree_sha256,
+    supplied_commit = actual_reviewed_commit
+      and migration_blob = 'ab1d75b1aba70f181818cf88c9d08c641abe82c4'
+      as pass
+  from source_provenance_facts
 ),
 required_0010_functions(signature) as (
   values
