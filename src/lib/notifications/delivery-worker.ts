@@ -2,13 +2,15 @@ import crypto from "node:crypto";
 import type { PushResult } from "../line.ts";
 
 // Phase 1A / Task 3: durable delivery worker core. Delivers ONLY
-// recipient_type = 'team', event_type = 'payment_received' rows
+// recipient_type = 'team' rows for the event types listed below
 // (0007_team_notification_outbox.sql) — never customer rows, never any other
 // event type. Kept free of Next.js/env imports (only relative imports) and
 // dependency-injected (db/sendPush/clock) so it can be exercised directly
 // under a plain Node test without a bundler; the route wrapper wires in the
 // real Supabase client, pushMessage, and Date.now().
-export const EVENT_TYPES = ["payment_received"];
+// 'slip_manual_review' (Phase 1 slip automation, 0010_slip_verification.sql):
+// a verified payment landed on an ineligible booking and needs a human.
+export const EVENT_TYPES = ["payment_received", "slip_manual_review"];
 export const DEFAULT_BATCH = 20;
 export const TIME_BUDGET_MS = 50_000;
 
@@ -33,6 +35,27 @@ export function renderPaymentReceivedMessage(row: ClaimedRow): string {
     `Booking: ${row.booking_id}`,
     `Payment order: ${row.payment_order_id ?? "-"}`,
   ].join("\n");
+}
+
+// Renders strictly from the fields confirm_slip_payment writes for a team
+// slip_manual_review row (booking_id, payment_order_id, reason) — see
+// 0010_slip_verification.sql. The reason is one of the fixed codes the
+// migration emits (booking_<status> / hold_expired), never free text.
+export function renderSlipManualReviewMessage(row: ClaimedRow): string {
+  const reason = typeof row.payload?.reason === "string" ? row.payload.reason : "-";
+  return [
+    "แจ้งเตือน: สลิปที่ยืนยันแล้วต้องการการตรวจสอบโดยทีมงาน",
+    `Booking: ${row.booking_id}`,
+    `Payment order: ${row.payment_order_id ?? "-"}`,
+    `เหตุผล: ${reason}`,
+  ].join("\n");
+}
+
+export function renderMessage(row: ClaimedRow): string {
+  if (row.event_type === "slip_manual_review") {
+    return renderSlipManualReviewMessage(row);
+  }
+  return renderPaymentReceivedMessage(row);
 }
 
 export type RpcResult = { data: unknown; error: { message: string } | null };
@@ -113,7 +136,7 @@ export async function runDeliveryWorker(deps: Deps): Promise<WorkerOutcome> {
 
     for (const row of rows) {
       result.processed++;
-      const text = renderPaymentReceivedMessage(row);
+      const text = renderMessage(row);
 
       let push: PushResult;
       try {

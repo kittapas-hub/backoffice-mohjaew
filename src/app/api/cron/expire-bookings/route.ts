@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { expireDuePaymentOrders } from "@/lib/payments/payment-transitions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,6 +29,12 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "server_error" }, { status: 500 });
   }
 
+  // Payment orders past expiry (Phase 1 slip flow creates real orders now).
+  // Never expires a booked/confirmed booking — see expire_due_payment_orders.
+  // Non-fatal: booking expiry above already ran.
+  const orders = await expireDuePaymentOrders();
+  const expiredOrders = orders.ok ? orders.expired : 0;
+
   // Orphan face-upload cleanup ------------------------------------------------
   // claim_expired_face_uploads_for_cleanup uses FOR UPDATE SKIP LOCKED to
   // atomically assign a cleanup_token lease to each row. Two concurrent cron
@@ -39,7 +46,7 @@ export async function GET(req: Request) {
   if (claimErr) {
     console.error("[cron] claim_expired_face_uploads_for_cleanup failed", claimErr);
     // Return partial success rather than 500 — bookings expiry already ran.
-    return NextResponse.json({ expired: data ?? 0, cleanedFaces: 0, claimError: true });
+    return NextResponse.json({ expired: data ?? 0, expiredOrders, cleanedFaces: 0, claimError: true });
   }
 
   type ClaimedRow = { id: string; storage_path: string; cleanup_token: string };
@@ -82,5 +89,5 @@ export async function GET(req: Request) {
     }
   }
 
-  return NextResponse.json({ expired: data ?? 0, cleanedFaces });
+  return NextResponse.json({ expired: data ?? 0, expiredOrders, cleanedFaces });
 }

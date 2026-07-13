@@ -43,6 +43,43 @@ export async function createPaymentOrder(opts: {
   return { ok: true, order };
 }
 
+// Provider tag for orders paid by manual PromptPay transfer + slip
+// verification (Phase 1). Distinct from the verification provider name
+// ('easyslip') recorded on payment_slip_verifications rows.
+export const SLIP_ORDER_PROVIDER = "promptpay_slip";
+
+/** Get (or idempotently create) the slip-payment order for a booking.
+ *  Deterministic idempotency key ⇒ any number of callers converge on one
+ *  order. Returns null when the booking is not eligible (RPC enforces
+ *  pending_payment + live hold) or the amount is not configured.
+ *  Trusted amount comes from server env — never from the browser. */
+export async function getOrCreateSlipPaymentOrder(
+  bookingId: string,
+  amountSatang: number,
+): Promise<PaymentOrder | null> {
+  const created = await createPaymentOrder({
+    bookingId,
+    idempotencyKey: `slip:${bookingId}`,
+    provider: SLIP_ORDER_PROVIDER,
+    amountSatang,
+  });
+  if (created.ok) return created.order;
+
+  // A different active order already exists (e.g. created by a future
+  // provider flow) — reuse it rather than fighting over the booking.
+  if (created.error === "active_order_exists") {
+    const db = supabaseAdmin();
+    const { data } = await db
+      .from("payment_orders")
+      .select("*")
+      .eq("booking_id", bookingId)
+      .in("status", ["created", "pending"])
+      .maybeSingle();
+    return (data as unknown as PaymentOrder) ?? null;
+  }
+  return null;
+}
+
 /** Look up a payment order by its public checkout_token (used by /pay/[token]). */
 export async function getPaymentOrderByCheckoutToken(
   checkoutToken: string,

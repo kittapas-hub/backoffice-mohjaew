@@ -76,12 +76,23 @@ for (const args of consoleErrorCalls) {
 
 const renderFnSrc = workerSrc.slice(
   workerSrc.indexOf("export function renderPaymentReceivedMessage"),
-  workerSrc.indexOf("export type RpcResult"),
+  workerSrc.indexOf("export function renderSlipManualReviewMessage"),
 );
 assert.doesNotMatch(
   renderFnSrc,
   /row\.(amount|customer_name|phone|payload)\b/,
   "message renderer must not invent fields absent from the payment_received payload",
+);
+// The slip_manual_review renderer may read ONLY payload.reason (which
+// confirm_slip_payment writes) — never amount/name/phone.
+const reviewFnSrc = workerSrc.slice(
+  workerSrc.indexOf("export function renderSlipManualReviewMessage"),
+  workerSrc.indexOf("export function renderMessage"),
+);
+assert.doesNotMatch(
+  reviewFnSrc,
+  /row\.(amount|customer_name|phone)\b|payload\?\.(amount|customer_name|phone)\b/,
+  "slip_manual_review renderer must not invent fields absent from its payload",
 );
 
 function makeRow(id: string): ClaimedRow {
@@ -146,7 +157,10 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
   assert.equal(result.ok, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].fn, "claim_team_notification_deliveries");
-  assert.deepEqual(calls[0].args.p_event_types, ["payment_received"]);
+  assert.deepEqual(calls[0].args.p_event_types, [
+    "payment_received",
+    "slip_manual_review",
+  ]);
 }
 
 // ===========================================================================
