@@ -1,7 +1,7 @@
 "use client";
 
 import { useTransition } from "react";
-import { confirmPayment } from "@/app/admin/actions";
+import { confirmBookingOverride, confirmPayment } from "@/app/admin/actions";
 
 type Props = {
   bookingId: string;
@@ -10,6 +10,7 @@ type Props = {
   slotInfo: string | null;
   refCode: string;
   redirectTo: string;
+  verifiedClaimAvailable?: boolean;
 };
 
 export function ConfirmPaymentButton({
@@ -19,30 +20,38 @@ export function ConfirmPaymentButton({
   slotInfo,
   refCode,
   redirectTo,
+  verifiedClaimAvailable = false,
 }: Props) {
   const [isPending, startTransition] = useTransition();
 
   function handleClick() {
-    const lines = [
-      "ยืนยันการชำระเงิน?",
-      "",
-      `ชื่อเล่น: ${nickname}`,
-      `เบอร์โทร: ${phone}`,
-      slotInfo ? `วัน/รอบ: ${slotInfo}` : null,
-      `เลขอ้างอิง: ${refCode}`,
-      "ยอด: 999 บาท",
-      "",
-      "⚠️ ตรวจสอบเงินเข้าบัญชีและสลิปเรียบร้อยแล้ว?",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const lines = verifiedClaimAvailable
+      ? [
+          "อนุมัติรายการชำระเงินที่ระบบตรวจสอบและบันทึกไว้แล้ว?",
+          "",
+          `ชื่อเล่น: ${nickname}`,
+          `เบอร์โทร: ${phone}`,
+          slotInfo ? `วัน/รอบ: ${slotInfo}` : null,
+          `เลขอ้างอิง: ${refCode}`,
+        ]
+      : [
+          "ยืนยันคิวโดยไม่บันทึกว่าเป็นการชำระเงินที่ตรวจสอบแล้ว?",
+          "",
+          `ชื่อเล่น: ${nickname}`,
+          `เบอร์โทร: ${phone}`,
+          slotInfo ? `วัน/รอบ: ${slotInfo}` : null,
+          `เลขอ้างอิง: ${refCode}`,
+          "",
+          "การดำเนินการนี้เป็น booking override และไม่สร้างหลักฐานการชำระเงิน",
+        ];
 
-    if (!confirm(lines)) return;
+    if (!confirm(lines.filter(Boolean).join("\n"))) return;
 
     const fd = new FormData();
     fd.set("bookingId", bookingId);
     fd.set("redirectTo", redirectTo);
-    startTransition(() => confirmPayment(fd));
+    const action = verifiedClaimAvailable ? confirmPayment : confirmBookingOverride;
+    startTransition(() => action(fd));
   }
 
   return (
@@ -51,7 +60,11 @@ export function ConfirmPaymentButton({
       disabled={isPending}
       className="rounded bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
     >
-      {isPending ? "กำลังดำเนินการ…" : "ยืนยันการชำระเงิน"}
+      {isPending
+        ? "กำลังดำเนินการ…"
+        : verifiedClaimAvailable
+          ? "อนุมัติรายการชำระที่ตรวจแล้ว"
+          : "ยืนยันคิว (ไม่บันทึกการชำระ)"}
     </button>
   );
 }

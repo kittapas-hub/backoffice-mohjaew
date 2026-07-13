@@ -25,12 +25,20 @@ export type PushResult = { ok: true } | { ok: false; retryable: boolean; error: 
 // Classifies the outcome instead of throwing/logging so callers (e.g. the
 // delivery worker) can decide retry vs. dead without ever seeing the token,
 // recipient id, request payload, or raw LINE response body.
-export async function pushMessage(to: string, text: string): Promise<PushResult> {
+export async function pushMessage(
+  to: string,
+  text: string,
+  retryKey: string = crypto.randomUUID(),
+): Promise<PushResult> {
   let res: Response;
   try {
     res = await fetch(`${API}/message/push`, {
       method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/json",
+        "X-Line-Retry-Key": retryKey,
+      },
       body: JSON.stringify({ to, messages: [{ type: "text", text }] }),
       signal: AbortSignal.timeout(10_000),
     });
@@ -38,7 +46,9 @@ export async function pushMessage(to: string, text: string): Promise<PushResult>
     return { ok: false, retryable: true, error: "network_error" };
   }
 
-  if (res.ok) return { ok: true };
+  // LINE reports an already-accepted retry key as a duplicate. That is a
+  // successful terminal outcome: retrying with the same key cannot add value.
+  if (res.ok || res.status === 409) return { ok: true };
 
   const retryable = res.status === 429 || res.status >= 500;
   return { ok: false, retryable, error: `line_push_failed_${res.status}` };

@@ -1,6 +1,7 @@
 // Server-only: create and query payment orders via Supabase service-role client.
 // No HTTP calls to external providers. No secrets beyond the service-role key.
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import crypto from "node:crypto";
 import type { PaymentOrder, CreateOrderError } from "./types.ts";
 
 const KNOWN_CREATE_ERRORS: CreateOrderError[] = [
@@ -53,31 +54,31 @@ export const SLIP_ORDER_PROVIDER = "promptpay_slip";
  *  order. Returns null when the booking is not eligible (RPC enforces
  *  pending_payment + live hold) or the amount is not configured.
  *  Trusted amount comes from server env — never from the browser. */
-export async function getOrCreateSlipPaymentOrder(
+export function slipOrderIdempotencyKey(bookingId: string, secret: string): string {
+  return `slip:v1:${crypto.createHmac("sha256", secret).update(bookingId).digest("hex")}`;
+}
+
+/** Explicit POST-only creation for the Phase 1 PromptPay slip flow. The RPC
+ * rejects a previously-created order when provider/currency/amount/profile
+ * differ, rather than accidentally reusing it. */
+export async function createSlipPaymentOrder(
   bookingId: string,
   amountSatang: number,
+  receiverProfile: string,
+  idempotencySecret: string,
 ): Promise<PaymentOrder | null> {
-  const created = await createPaymentOrder({
-    bookingId,
-    idempotencyKey: `slip:${bookingId}`,
-    provider: SLIP_ORDER_PROVIDER,
-    amountSatang,
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("create_slip_payment_order", {
+    p_booking_id: bookingId,
+    p_idempotency_key: slipOrderIdempotencyKey(bookingId, idempotencySecret),
+    p_amount_satang: amountSatang,
+    p_receiver_profile: receiverProfile,
   });
-  if (created.ok) return created.order;
-
-  // A different active order already exists (e.g. created by a future
-  // provider flow) — reuse it rather than fighting over the booking.
-  if (created.error === "active_order_exists") {
-    const db = supabaseAdmin();
-    const { data } = await db
-      .from("payment_orders")
-      .select("*")
-      .eq("booking_id", bookingId)
-      .in("status", ["created", "pending"])
-      .maybeSingle();
-    return (data as unknown as PaymentOrder) ?? null;
+  if (error || !data) {
+    if (error) console.error("create_slip_payment_order failed", { code: error.code });
+    return null;
   }
-  return null;
+  return (Array.isArray(data) ? data[0] : data) as PaymentOrder;
 }
 
 /** Look up a payment order by its public checkout_token (used by /pay/[token]). */

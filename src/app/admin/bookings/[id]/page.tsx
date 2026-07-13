@@ -189,6 +189,7 @@ export default async function BookingDetail({
                   slotInfo={null}
                   refCode={booking.id.slice(0, 8).toUpperCase()}
                   redirectTo={`/admin/bookings/${booking.id}`}
+                  verifiedClaimAvailable={latestOrder?.status === "manual_review"}
                 />
               ) : (
                 <form key={to} action={transitionSlotBooking}>

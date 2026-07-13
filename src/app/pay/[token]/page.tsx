@@ -10,6 +10,7 @@ import { getPaymentOrderByCheckoutToken } from "@/lib/payments/payment-orders";
 import { paymentConfig, slipVerificationConfig } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { SlipUpload } from "./SlipUpload";
+import { isSlipUploadReady } from "./pay-page-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -172,9 +173,7 @@ function PayableSection({ token }: { token: string }) {
   const hasQR = Boolean(cfg.qrPath);
   const qrSrc = cfg.qrPath.startsWith("/") ? cfg.qrPath : `/${cfg.qrPath}`;
   const slipCfg = slipVerificationConfig();
-  const autoVerifyReady = Boolean(
-    slipCfg.easySlipApiKey && slipCfg.receiverAccounts.length > 0,
-  );
+  const autoVerifyReady = isSlipUploadReady(slipCfg);
 
   return (
     <>

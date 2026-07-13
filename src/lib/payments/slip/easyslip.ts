@@ -1,19 +1,12 @@
-// EasySlip adapter. SERVER-ONLY: holds the API key, talks HTTP to EasySlip,
-// and translates its response into NormalizedSlipVerification. EasySlip
-// response shapes must never escape this file.
-//
-// API: POST https://developer.easyslip.com/api/v1/verify
-//      Authorization: Bearer <api key> (injected by env.ts), multipart "file".
-// Docs: https://document.easyslip.com — response fields are parsed
-// defensively; anything missing/unexpected degrades to null fields or a
-// malformed_response failure, never to a thrown exception with payload data.
+// EasySlip v2 adapter. SERVER-ONLY: the API key and provider response never
+// cross this boundary. Partial or unexpected response shapes fail closed.
 import type {
   SlipVerificationProvider,
   SlipVerifyResult,
   VerifiedUploadInput,
 } from "./types.ts";
 
-const EASYSLIP_VERIFY_URL = "https://developer.easyslip.com/api/v1/verify";
+const EASYSLIP_VERIFY_URL = "https://api.easyslip.com/v2/verify/bank";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 type Json = Record<string, unknown>;
@@ -24,6 +17,10 @@ function str(v: unknown): string | null {
 
 function obj(v: unknown): Json {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {};
+}
+
+function has(o: Json, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(o, key);
 }
 
 /** THB (possibly fractional) -> integer satang. Null when absent/invalid. */
@@ -39,7 +36,6 @@ export function parseTransferDate(v: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Map an EasySlip HTTP error to a normalized failure. Exported for tests. */
 export function mapEasySlipError(
   httpStatus: number,
   message: string | null,
@@ -48,16 +44,13 @@ export function mapEasySlipError(
     return { ok: false, reason: "provider_rate_limited", retryable: true };
   }
   if (httpStatus === 401 || httpStatus === 403) {
-    // Includes quota/account problems — our configuration, not the customer.
     return { ok: false, reason: "provider_auth_error", retryable: false };
   }
   if (httpStatus === 404) {
-    // Slip QR decoded but no matching transaction at the bank.
     return { ok: false, reason: "slip_not_found", retryable: false };
   }
   if (httpStatus === 400) {
-    const m = message ?? "";
-    if (m.includes("quota")) {
+    if ((message ?? "").toLowerCase().includes("quota")) {
       return { ok: false, reason: "provider_auth_error", retryable: false };
     }
     return { ok: false, reason: "unreadable_image", retryable: false };
@@ -65,46 +58,96 @@ export function mapEasySlipError(
   return { ok: false, reason: "provider_error", retryable: true };
 }
 
-/** Parse a 200 body into the normalized shape. Exported for tests. */
+/** Parse the official v2 response envelope without inventing missing values. */
 export function normalizeEasySlipBody(body: unknown): SlipVerifyResult {
   const root = obj(body);
-  const data = obj(root.data);
-  const txRef = str(data.transRef);
-  const amount = thbToSatang(obj(data.amount).amount);
-  if (!txRef && amount === null) {
-    // A "success" body carrying neither a tx ref nor an amount is not a
-    // usable verification — treat as malformed rather than guessing.
+  if (root.success !== true || !str(root.message) || !has(root, "data")) {
     return { ok: false, reason: "malformed_response", retryable: false };
   }
 
-  const receiver = obj(data.receiver);
+  const data = obj(root.data);
+  if (
+    typeof data.isDuplicate !== "boolean" ||
+    !has(data, "matchedAccount") ||
+    !has(data, "amountInSlip") ||
+    !has(data, "rawSlip")
+  ) {
+    return { ok: false, reason: "malformed_response", retryable: false };
+  }
+
+  const rawSlip = obj(data.rawSlip);
+  const rawAmount = obj(rawSlip.amount);
+  const localAmount = obj(rawAmount.local);
+  const txRef = str(rawSlip.transRef);
+  const transferTimestamp = parseTransferDate(rawSlip.date);
+  const amount = thbToSatang(rawAmount.amount);
+  const amountInSlip = thbToSatang(data.amountInSlip);
+  const currency = str(localAmount.currency)?.toUpperCase() ?? null;
+  const receiver = obj(rawSlip.receiver);
+  const receiverBank = obj(receiver.bank);
   const receiverAccount = obj(receiver.account);
-  const sender = obj(data.sender);
+  const receiverName = obj(receiverAccount.name);
+  const matched = data.matchedAccount === null ? null : obj(data.matchedAccount);
+  const matchedValid = matched === null || (
+    Boolean(str(matched.bankNumber)) &&
+    Boolean(str(matched.nameTh) || str(matched.nameEn)) &&
+    Boolean(str(obj(matched.bank).code))
+  );
+  const sender = obj(rawSlip.sender);
+  const senderBankObj = obj(sender.bank);
   const senderAccount = obj(sender.account);
-  const senderName =
-    str(obj(senderAccount.name).th) ?? str(obj(senderAccount.name).en);
-  const senderBank = str(obj(sender.bank).short) ?? str(obj(sender.bank).name);
+  const senderNameObj = obj(senderAccount.name);
+  const receiverIdentifier = str(obj(receiverAccount.bank).account) ??
+    str(obj(receiverAccount.proxy).account);
+
+  if (
+    !str(rawSlip.payload) ||
+    !txRef ||
+    !transferTimestamp ||
+    amount === null ||
+    amount <= 0 ||
+    amountInSlip !== amount ||
+    thbToSatang(localAmount.amount) !== amount ||
+    !currency ||
+    str(rawSlip.countryCode) !== "TH" ||
+    typeof rawSlip.fee !== "number" ||
+    !Number.isFinite(rawSlip.fee) ||
+    typeof rawSlip.ref1 !== "string" ||
+    typeof rawSlip.ref2 !== "string" ||
+    typeof rawSlip.ref3 !== "string" ||
+    !str(senderBankObj.short) ||
+    (!str(senderNameObj.th) && !str(senderNameObj.en)) ||
+    !str(receiverBank.short) ||
+    !receiverIdentifier ||
+    (!str(receiverName.th) && !str(receiverName.en)) ||
+    !matchedValid
+  ) {
+    return { ok: false, reason: "malformed_response", retryable: false };
+  }
+
+  const senderName = str(senderNameObj.th) ?? str(senderNameObj.en);
+  const senderBank = str(senderBankObj.short) ?? str(senderBankObj.name);
 
   return {
     ok: true,
     slip: {
-      provider: "easyslip",
+      provider: "promptpay_slip",
       providerTransactionReference: txRef,
-      transferTimestamp: parseTransferDate(data.date),
+      transferTimestamp,
       amountSatang: amount,
+      currency,
       receiver: {
-        bankShort:
-          str(obj(receiver.bank).short) ?? str(obj(receiver.bank).name),
+        bankShort: str(receiverBank.short) ?? str(receiverBank.name),
         accountMasked: str(obj(receiverAccount.bank).account),
         proxyMasked: str(obj(receiverAccount.proxy).account),
-        nameTh: str(obj(receiverAccount.name).th),
-        nameEn: str(obj(receiverAccount.name).en),
+        nameTh: str(receiverName.th),
+        nameEn: str(receiverName.en),
+        providerMatchedAccount: matched !== null,
       },
-      senderDisplay:
-        senderName || senderBank
-          ? [senderName, senderBank].filter(Boolean).join(" / ")
-          : null,
-      duplicateSignal: null, // EasySlip does not expose one on this endpoint
+      senderDisplay: senderName || senderBank
+        ? [senderName, senderBank].filter(Boolean).join(" / ")
+        : null,
+      duplicateSignal: data.isDuplicate,
     },
   };
 }
@@ -118,14 +161,16 @@ export function easySlipProvider(opts: {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   return {
-    name: "easyslip",
+    name: "promptpay_slip",
     async verify(input: VerifiedUploadInput): Promise<SlipVerifyResult> {
       const form = new FormData();
       form.append(
-        "file",
+        "image",
         new Blob([new Uint8Array(input.image)], { type: input.mimeType }),
         "slip",
       );
+      form.append("matchAccount", "true");
+      form.append("checkDuplicate", "true");
 
       let res: Response;
       try {
@@ -147,11 +192,11 @@ export function easySlipProvider(opts: {
       try {
         body = await res.json();
       } catch {
-        // fall through with body = null
+        // Null is handled as a malformed response below.
       }
 
       if (!res.ok) {
-        return mapEasySlipError(res.status, str(obj(body).message));
+        return mapEasySlipError(res.status, str(obj(obj(body).error).message));
       }
       if (body === null) {
         return { ok: false, reason: "malformed_response", retryable: false };

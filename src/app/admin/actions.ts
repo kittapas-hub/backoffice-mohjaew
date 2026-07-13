@@ -45,7 +45,34 @@ export async function transitionSlotBooking(formData: FormData) {
 // transition_slot_booking, 0008_reject_expired_hold_confirmation.sql). This
 // fast-fail check is a UX shortcut only; the RPC is the real invariant and
 // is never bypassed even if this check is skewed by clock drift.
+// Current contract: only an existing, provider-verified manual_review claim
+// can be approved here; the older hold-check description above applies to the
+// separately named confirmBookingOverride action below.
 export async function confirmPayment(formData: FormData) {
+  await requireAdmin();
+  const id = String(formData.get("bookingId") ?? "");
+  const redirectTo = String(formData.get("redirectTo") ?? "/admin");
+  if (!id) return;
+
+  const { error } = await supabaseAdmin().rpc("approve_manual_review_payment", {
+    p_booking_id: id,
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/day");
+  revalidatePath(`/admin/bookings/${id}`);
+
+  const sep = redirectTo.includes("?") ? "&" : "?";
+  if (error) {
+    console.error("approve_manual_review_payment failed", { code: error.code });
+    redirect(`${redirectTo}${sep}error=invalid_transition`);
+  }
+  redirect(`${redirectTo}${sep}success=payment_confirmed`);
+}
+
+// Explicit operational override: changes booking state only and records no
+// verified transaction or paid payment order.
+export async function confirmBookingOverride(formData: FormData) {
   await requireAdmin();
   const id = String(formData.get("bookingId") ?? "");
   const redirectTo = String(formData.get("redirectTo") ?? "/admin");
@@ -81,12 +108,12 @@ export async function confirmPayment(formData: FormData) {
   revalidatePath(`/admin/bookings/${id}`);
 
   if (error) {
-    console.error("confirmPayment failed", error.message);
+    console.error("confirmBookingOverride failed", error.message);
     const sep = redirectTo.includes("?") ? "&" : "?";
     redirect(`${redirectTo}${sep}error=${mapTransitionError(error.message)}`);
   }
   const sep = redirectTo.includes("?") ? "&" : "?";
-  redirect(`${redirectTo}${sep}success=payment_confirmed`);
+  redirect(`${redirectTo}${sep}success=booking_override_confirmed`);
 }
 
 // Status change for LEGACY/manual bookings only (slot_id is null). Slot
