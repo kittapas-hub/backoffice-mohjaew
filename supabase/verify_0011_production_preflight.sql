@@ -14,7 +14,7 @@
 with
 source_provenance as (
   select
-    '6af83563216a2701a3878d74c85e86ff510b093b'::text as supplied_commit,
+    '6af8356eae317393403a4fc6780e53596489d08b'::text as supplied_commit,
     '6af8356eae317393403a4fc6780e53596489d08b'::text as actual_reviewed_commit,
     'ab1d75b1aba70f181818cf88c9d08c641abe82c4'::text as migration_blob,
     '6c30aa9c267d6645bf9a2bf1b916bc8da31dc9ddd14fd4fe795c1086f8cff6a7'::text
