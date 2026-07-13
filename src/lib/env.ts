@@ -49,6 +49,31 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   return adminEmails().includes(email.toLowerCase());
 }
 
+// Slip verification (EasySlip) — SERVER-ONLY. The API key must never reach
+// the browser bundle; only server modules may call this.
+// receiverAccounts: masked account/proxy strings exactly as EasySlip reports
+// them for the shop's receiving account (capture once from a real slip).
+// An empty list makes verification fail closed (nothing auto-confirms).
+export function slipVerificationConfig() {
+  const split = (v: string | undefined) =>
+    (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return {
+    easySlipApiKey: process.env.EASYSLIP_API_KEY ?? "",
+    receiverAccounts: split(process.env.SLIP_RECEIVER_ACCOUNTS),
+    receiverNames: split(process.env.SLIP_RECEIVER_NAMES),
+  };
+}
+
+// Trusted booking price in satang, from BOOKING_PAYMENT_AMOUNT_THB.
+// Null when unset/invalid — payment orders are then not created and the
+// pre-Phase-1 manual flow is the only path.
+export function paymentAmountSatang(): number | null {
+  const raw = process.env.BOOKING_PAYMENT_AMOUNT_THB ?? "";
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100);
+}
+
 // Payment instructions displayed on /booking/success.
 // All four fields (amount, bankName, accountName, accountNumber) must be set
 // for the payment card to appear; if any is empty a safe fallback is shown.
