@@ -27,6 +27,8 @@ export function BookingStatusPanel(props: {
   accountName: string;
   accountNumber: string;
   lineHref: string;
+  /** /pay/<checkout_token> when automatic slip verification is available. */
+  payUrl?: string | null;
 }) {
   const [status, setStatus] = useState(props.initialStatus);
 
@@ -199,6 +201,15 @@ export function BookingStatusPanel(props: {
                 action={<CopyButton text={props.reference} label="คัดลอก" />}
               />
             </dl>
+
+            {props.payUrl && (
+              <Link
+                href={props.payUrl}
+                className="mb-3 block rounded-xl bg-rose-600 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-rose-700"
+              >
+                อัปโหลดสลิป — ยืนยันคิวอัตโนมัติ
+              </Link>
+            )}
 
             {props.lineHref && (
               <LineCta href={props.lineHref} expiresAt={props.holdExpiresAt} />

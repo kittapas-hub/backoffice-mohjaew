@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getBookingByToken, type BookingTokenData } from "@/lib/booking-core";
-import { paymentConfig } from "@/lib/env";
+import { getOrCreateSlipPaymentOrder } from "@/lib/payments/payment-orders";
+import { paymentConfig, paymentAmountSatang, slipVerificationConfig } from "@/lib/env";
 import { BookingStatusPanel } from "./BookingStatusPanel";
 import { buildLineHref, buildLinePrefill } from "./helpers";
 import { Wrapper, IconCircle, formatThaiDeadline } from "./ui";
@@ -50,6 +51,30 @@ export default async function BookingSuccess({
   const linePrefillText = buildLinePrefill({ reference: booking.reference });
   const lineHref = buildLineHref(cfg.lineOaUrl, linePrefillText);
 
+  // Automatic slip verification (Phase 1): make sure the booking has a
+  // payment order and surface its /pay link. Idempotent get-or-create (the
+  // create_payment_order RPC enforces pending_payment + live hold), so a
+  // page refresh or concurrent render converges on the same order. Only
+  // attempted when everything needed for auto-verification is configured;
+  // otherwise the pre-Phase-1 manual LINE flow renders unchanged.
+  let payUrl: string | null = null;
+  const amountSatang = paymentAmountSatang();
+  const slipCfg = slipVerificationConfig();
+  const holdLive = Boolean(
+    booking.holdExpiresAt &&
+      new Date(booking.holdExpiresAt).getTime() > Date.now(),
+  );
+  if (
+    booking.status === "pending_payment" &&
+    holdLive &&
+    amountSatang !== null &&
+    slipCfg.easySlipApiKey &&
+    slipCfg.receiverAccounts.length > 0
+  ) {
+    const order = await getOrCreateSlipPaymentOrder(token, amountSatang);
+    if (order) payUrl = `/pay/${order.checkout_token}`;
+  }
+
   return (
     <BookingStatusPanel
       token={token}
@@ -68,6 +93,7 @@ export default async function BookingSuccess({
       accountName={cfg.accountName}
       accountNumber={cfg.accountNumber}
       lineHref={lineHref}
+      payUrl={payUrl}
     />
   );
 }
