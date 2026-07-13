@@ -8,7 +8,7 @@ import type { PushResult } from "../line.ts";
 // dependency-injected (db/sendPush/clock) so it can be exercised directly
 // under a plain Node test without a bundler; the route wrapper wires in the
 // real Supabase client, pushMessage, and Date.now().
-// 'slip_manual_review' (Phase 1 slip automation, 0010_slip_verification.sql):
+// 'slip_manual_review' (Phase 1 slip automation, 0011_slip_verification.sql):
 // a verified payment landed on an ineligible booking and needs a human.
 export const EVENT_TYPES = ["payment_received", "slip_manual_review"];
 export const DEFAULT_BATCH = 20;
@@ -23,6 +23,7 @@ export type ClaimedRow = {
   payload: Record<string, unknown> | null;
   idempotency_key: string;
   attempt_count: number;
+  line_retry_key: string;
 };
 
 // Renders strictly from the fields process_payment_paid_event actually
@@ -39,7 +40,7 @@ export function renderPaymentReceivedMessage(row: ClaimedRow): string {
 
 // Renders strictly from the fields confirm_slip_payment writes for a team
 // slip_manual_review row (booking_id, payment_order_id, reason) — see
-// 0010_slip_verification.sql. The reason is one of the fixed codes the
+// 0011_slip_verification.sql. The reason is one of the fixed codes the
 // migration emits (booking_<status> / hold_expired), never free text.
 export function renderSlipManualReviewMessage(row: ClaimedRow): string {
   const reason = typeof row.payload?.reason === "string" ? row.payload.reason : "-";
@@ -62,7 +63,7 @@ export type RpcResult = { data: unknown; error: { message: string } | null };
 
 export type Deps = {
   db: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<RpcResult> };
-  sendPush: (to: string, text: string) => Promise<PushResult>;
+  sendPush: (to: string, text: string, retryKey: string) => Promise<PushResult>;
   groupId: string;
   now: () => number;
   batch: number;
@@ -140,7 +141,7 @@ export async function runDeliveryWorker(deps: Deps): Promise<WorkerOutcome> {
 
       let push: PushResult;
       try {
-        push = await deps.sendPush(deps.groupId, text);
+        push = await deps.sendPush(deps.groupId, text, row.line_retry_key);
       } catch {
         push = { ok: false, retryable: true, error: "push_unexpected_error" };
       }

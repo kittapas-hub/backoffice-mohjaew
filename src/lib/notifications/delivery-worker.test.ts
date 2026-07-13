@@ -105,6 +105,7 @@ function makeRow(id: string): ClaimedRow {
     payload: { booking_id: `booking-${id}`, payment_order_id: `order-${id}` },
     idempotency_key: `pay:received:team:order-${id}`,
     attempt_count: 0,
+    line_retry_key: "11111111-1111-4111-8111-111111111111",
   };
 }
 
@@ -189,7 +190,8 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
   };
   const result = await runDeliveryWorker({
     db,
-    sendPush: async (_to, text) => {
+    sendPush: async (_to, text, retryKey) => {
+      assert.equal(retryKey, "11111111-1111-4111-8111-111111111111");
       const key = Object.keys(pushResults).find((k) => text.includes(k))!;
       return pushResults[key];
     },

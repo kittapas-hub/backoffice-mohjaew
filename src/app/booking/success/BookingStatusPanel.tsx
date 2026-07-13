@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CopyButton } from "./CopyButton";
 import { HoldCountdown } from "./HoldCountdown";
 import { LineCta } from "./LineCta";
+import { SlipVerificationLink } from "./SlipVerificationLink";
 import { STATUS_POLL_INTERVAL_MS, shouldPollStatus } from "./helpers";
 import { STATUS_INFO, formatThaiDate, Wrapper, IconCircle, Row } from "./ui";
 
@@ -27,8 +28,8 @@ export function BookingStatusPanel(props: {
   accountName: string;
   accountNumber: string;
   lineHref: string;
-  /** /pay/<checkout_token> when automatic slip verification is available. */
-  payUrl?: string | null;
+  /** POST-only endpoint when automatic slip verification is available. */
+  slipOrderUrl?: string | null;
 }) {
   const [status, setStatus] = useState(props.initialStatus);
 
@@ -202,9 +203,12 @@ export function BookingStatusPanel(props: {
               />
             </dl>
 
-            {props.payUrl && (
+            {props.slipOrderUrl && (
+              <SlipVerificationLink orderUrl={props.slipOrderUrl} />
+            )}
+            {false && (
               <Link
-                href={props.payUrl}
+                href="#"
                 className="mb-3 block rounded-xl bg-rose-600 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-rose-700"
               >
                 อัปโหลดสลิป — ยืนยันคิวอัตโนมัติ

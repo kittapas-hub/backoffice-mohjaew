@@ -13,6 +13,16 @@ function mockFetch(handler: () => Promise<Response> | Response | never) {
   globalThis.fetch = (async () => handler()) as typeof fetch;
 }
 
+// The retry key is supplied by the durable outbox row and must be transmitted
+// unchanged. LINE 409 for that key means the prior request was accepted.
+let observedRetryKey: string | null = null;
+globalThis.fetch = (async (_url, init) => {
+  observedRetryKey = new Headers(init?.headers).get("X-Line-Retry-Key");
+  return new Response("{}", { status: 409 });
+}) as typeof fetch;
+assert.deepEqual(await pushMessage("U123", "hello", "retry-key-1"), { ok: true });
+assert.equal(observedRetryKey, "retry-key-1");
+
 // --- 2xx => success -----------------------------------------------------
 mockFetch(() => new Response("{}", { status: 200 }));
 {

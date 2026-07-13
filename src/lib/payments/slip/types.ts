@@ -28,6 +28,8 @@ export type NormalizedSlipVerification = {
   transferTimestamp: Date | null;
   /** Transfer amount in satang (integer). */
   amountSatang: number | null;
+  /** Provider-reported ISO currency. Never synthesized downstream. */
+  currency: string | null;
   /** Receiver identity evidence (masked by the provider). */
   receiver: {
     bankShort: string | null;
@@ -37,6 +39,9 @@ export type NormalizedSlipVerification = {
     proxyMasked: string | null;
     nameTh: string | null;
     nameEn: string | null;
+    /** True only when EasySlip v2 matched the receiver to the merchant's
+     * registered account. A masked suffix alone is never sufficient. */
+    providerMatchedAccount?: boolean | null;
   };
   /** Sender display evidence where available (masked name/bank for audit). */
   senderDisplay: string | null;

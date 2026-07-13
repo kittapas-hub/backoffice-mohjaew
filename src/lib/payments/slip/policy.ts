@@ -2,21 +2,13 @@
 // Every value compared here comes from the database (order) or the
 // verification provider (slip); nothing is browser-supplied.
 //
-// Payment-window policy (Phase 1):
-//   the transfer must have happened between (order created_at − 30 min of
-//   clock skew/pre-transfer allowance) and (now + 10 min of provider clock
-//   skew). Anything outside — including a missing timestamp — is NOT
-//   auto-confirmed and routes to the exception path (customer told to
-//   contact the team; the team can use the manual confirmation flow).
+// The transfer window is enforced only by confirm_slip_payment under DB row
+// locks. This module intentionally does not reject late, verified money:
+// the database must claim it and route it to manual review.
 import type { NormalizedSlipVerification } from "./types.ts";
 
-export const TRANSFER_WINDOW_BEFORE_ORDER_MS = 30 * 60 * 1000;
-export const TRANSFER_CLOCK_SKEW_AFTER_NOW_MS = 10 * 60 * 1000;
-
 export type SlipPolicyRejection =
-  | "tx_ref_missing"
-  | "receiver_mismatch"
-  | "timestamp_out_of_window";
+  | "tx_ref_missing";
 
 export type SlipPolicyDecision =
   | { ok: true }
@@ -31,6 +23,11 @@ export type ReceiverConfig = {
    *  provider returned a receiver name, the name must also match. */
   names: string[];
 };
+
+// Retained only as deprecated exports for downstream compatibility. The DB
+// function now owns the strict time policy under locks.
+export const TRANSFER_WINDOW_BEFORE_ORDER_MS = 0;
+export const TRANSFER_CLOCK_SKEW_AFTER_NOW_MS = 0;
 
 /** Keep only digits and mask characters; masks compare position-blind.
  *  "xxx-x-x1234-x" -> "xxxx1234x" */
@@ -52,23 +49,26 @@ export function receiverMatches(
   receiver: NormalizedSlipVerification["receiver"],
   config: ReceiverConfig,
 ): boolean {
-  if (config.accounts.length === 0) return false; // fail closed: unconfigured
+  if (
+    config.accounts.length === 0 ||
+    config.names.length === 0 ||
+    receiver.providerMatchedAccount !== true
+  ) return false; // fail closed: no profile or no provider-side match
 
   const expected = config.accounts.map(normalizeAccount).filter(Boolean);
   const actual = [receiver.accountMasked, receiver.proxyMasked]
     .filter((v): v is string => Boolean(v))
     .map(normalizeAccount);
-  if (!actual.some((a) => expected.includes(a))) return false;
+  const matchingAccounts = [...new Set(actual.filter((a) => expected.includes(a)))];
+  if (matchingAccounts.length !== 1) return false;
 
   // Secondary factor: when both sides have names, they must agree too.
   const providerNames = [receiver.nameTh, receiver.nameEn]
     .filter((v): v is string => Boolean(v))
     .map(normalizeName);
-  if (config.names.length > 0 && providerNames.length > 0) {
-    const expectedNames = config.names.map(normalizeName).filter(Boolean);
-    if (!providerNames.some((n) => expectedNames.includes(n))) return false;
-  }
-  return true;
+  const expectedNames = config.names.map(normalizeName).filter(Boolean);
+  const matchingNames = [...new Set(providerNames.filter((n) => expectedNames.includes(n)))];
+  return matchingNames.length === 1;
 }
 
 /** Validate a verified slip against the trusted order values.
@@ -78,28 +78,11 @@ export function receiverMatches(
  *  never checked: the payer does not have to be the booking customer. */
 export function evaluateSlipPolicy(
   slip: NormalizedSlipVerification,
-  opts: {
-    orderCreatedAt: Date;
-    now: Date;
-    receiverConfig: ReceiverConfig;
-  },
+  _opts?: { receiverConfig?: ReceiverConfig; orderCreatedAt?: Date; now?: Date },
 ): SlipPolicyDecision {
+  void _opts;
   const txRef = slip.providerTransactionReference?.trim() ?? "";
   if (!txRef) return { ok: false, code: "tx_ref_missing" };
-
-  if (!receiverMatches(slip.receiver, opts.receiverConfig)) {
-    return { ok: false, code: "receiver_mismatch" };
-  }
-
-  const t = slip.transferTimestamp?.getTime();
-  if (
-    t === undefined ||
-    Number.isNaN(t) ||
-    t < opts.orderCreatedAt.getTime() - TRANSFER_WINDOW_BEFORE_ORDER_MS ||
-    t > opts.now.getTime() + TRANSFER_CLOCK_SKEW_AFTER_NOW_MS
-  ) {
-    return { ok: false, code: "timestamp_out_of_window" };
-  }
 
   return { ok: true };
 }

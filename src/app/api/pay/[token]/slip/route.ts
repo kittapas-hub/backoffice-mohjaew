@@ -6,7 +6,7 @@
 // forwarded to the provider and NEVER stored or logged.
 //
 // The confirmation itself is one atomic DB RPC (confirm_slip_payment) —
-// see supabase/migrations/0010_slip_verification.sql.
+// see supabase/migrations/0011_slip_verification.sql.
 import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { recordRateHit } from "@/lib/booking-core";
@@ -15,7 +15,7 @@ import { slipVerificationConfig } from "@/lib/env";
 import { validateSlipImage } from "@/lib/image-meta";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { easySlipProvider } from "@/lib/payments/slip/easyslip";
-import { evaluateSlipPolicy } from "@/lib/payments/slip/policy";
+import { evaluateSlipPolicy, receiverMatches } from "@/lib/payments/slip/policy";
 import {
   confirmSlipPayment,
   countSlipAttempts,
@@ -46,7 +46,7 @@ function fail(status: number, body: Fail) {
 
 function buildProvider(): SlipVerificationProvider | null {
   const cfg = slipVerificationConfig();
-  if (!cfg.easySlipApiKey) return null;
+  if (!cfg.enabled || cfg.provider !== "easyslip_v2" || !cfg.easySlipApiKey) return null;
   return easySlipProvider({ apiKey: cfg.easySlipApiKey });
 }
 
@@ -62,7 +62,8 @@ export async function POST(
   // Server configuration — fail closed, never silently skip verification.
   const cfg = slipVerificationConfig();
   const rateSecret = process.env.BOOKING_RATE_LIMIT_SECRET;
-  if (!cfg.easySlipApiKey || cfg.receiverAccounts.length === 0 || !rateSecret) {
+  if (!cfg.enabled || cfg.provider !== "easyslip_v2" || !cfg.easySlipApiKey || !cfg.receiverProfile || cfg.receiverAccounts.length === 0 ||
+      cfg.receiverNames.length === 0 || !rateSecret) {
     console.error("[slip] verification not configured (key/receiver/rate-limit)");
     return fail(503, {
       error: "not_configured",
@@ -140,22 +141,9 @@ export async function POST(
     return fail(409, { error: "order_closed", message: "รายการนี้ปิดแล้ว กรุณาจองคิวใหม่" });
   }
 
-  const { data: booking } = await db
-    .from("bookings")
-    .select("status, hold_expires_at")
-    .eq("id", order.booking_id)
-    .maybeSingle();
-  const holdLive =
-    booking?.status === "pending_payment" &&
-    booking.hold_expires_at !== null &&
-    new Date(booking.hold_expires_at).getTime() > Date.now();
-  if (!holdLive) {
-    // Fast-fail UX only — confirm_slip_payment re-enforces this atomically.
-    return fail(409, {
-      error: "hold_expired",
-      message: `หมดเวลาถือคิวแล้ว หากคุณโอนเงินไปแล้ว ${CONTACT_TEAM}`,
-    });
-  }
+  // Do not pre-reject an expired hold here. A provider-verified upload after
+  // expiry must reach the locked RPC so the real transaction is claimed and
+  // safely routed to manual review rather than remaining replayable.
 
   // Per-order attempt ceiling (abuse control / provider quota protection).
   const attempts = await countSlipAttempts(order.id);
@@ -213,11 +201,7 @@ export async function POST(
   }
 
   // Trusted policy checks (amount + duplicate checks live inside the RPC).
-  const decision = evaluateSlipPolicy(verified.slip, {
-    orderCreatedAt: new Date(order.created_at),
-    now: new Date(),
-    receiverConfig: { accounts: cfg.receiverAccounts, names: cfg.receiverNames },
-  });
+  const decision = evaluateSlipPolicy(verified.slip);
   if (!decision.ok) {
     await recordSlipRejection({
       paymentOrderId: order.id,
@@ -232,7 +216,7 @@ export async function POST(
       code: decision.code,
       txRef: redactedTxRef,
     });
-    const messages: Record<typeof decision.code, string> = {
+    const messages: Record<string, string> = {
       tx_ref_missing: `อ่านเลขอ้างอิงธุรกรรมจากสลิปไม่ได้ กรุณาใช้สลิปต้นฉบับ หรือ${CONTACT_TEAM}`,
       receiver_mismatch: `บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน กรุณาตรวจสอบว่าโอนถูกบัญชี หรือ${CONTACT_TEAM}`,
       timestamp_out_of_window: `เวลาโอนในสลิปอยู่นอกช่วงเวลาชำระของคิวนี้ ${CONTACT_TEAM}`,
@@ -260,6 +244,10 @@ export async function POST(
   const confirmed = await confirmSlipPayment({
     paymentOrderId: order.id,
     slip: verified.slip,
+    receiverProfile: receiverMatches(verified.slip.receiver, {
+      accounts: cfg.receiverAccounts,
+      names: cfg.receiverNames,
+    }) ? cfg.receiverProfile : null,
   });
 
   switch (confirmed.result) {

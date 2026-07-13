@@ -51,17 +51,26 @@ export function isAdminEmail(email: string | null | undefined): boolean {
 
 // Slip verification (EasySlip) — SERVER-ONLY. The API key must never reach
 // the browser bundle; only server modules may call this.
-// receiverAccounts: masked account/proxy strings exactly as EasySlip reports
-// them for the shop's receiving account (capture once from a real slip).
-// An empty list makes verification fail closed (nothing auto-confirms).
+// receiverProfile is the immutable, owner-approved profile identifier stored
+// on each order. The account/name values are a second server-side check of
+// EasySlip v2's registered-account result. Missing any part fails closed.
 export function slipVerificationConfig() {
   const split = (v: string | undefined) =>
     (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   return {
+    enabled: process.env.SLIP_VERIFICATION_ENABLED === "true" &&
+      process.env.SLIP_VERIFICATION_PROVIDER === "easyslip_v2",
+    provider: process.env.SLIP_VERIFICATION_PROVIDER ?? "",
     easySlipApiKey: process.env.EASYSLIP_API_KEY ?? "",
+    receiverProfile: process.env.SLIP_RECEIVER_PROFILE ?? "",
     receiverAccounts: split(process.env.SLIP_RECEIVER_ACCOUNTS),
     receiverNames: split(process.env.SLIP_RECEIVER_NAMES),
   };
+}
+
+/** Explicit server-only release gate. Credentials never enable automation. */
+export function slipVerificationEnabled(): boolean {
+  return slipVerificationConfig().enabled;
 }
 
 // Trusted booking price in satang, from BOOKING_PAYMENT_AMOUNT_THB.
