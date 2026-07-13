@@ -1,15 +1,15 @@
-// /pay/[token] — future payment checkout page.
+// /pay/[token] — PromptPay payment page with automatic slip verification.
 // 'token' is payment_orders.checkout_token (a UUID, non-guessable).
 //
-// SAFE: Does not accept money. Does not call any provider.
-// Does not expose customer PII (name, contact number, birth date, topic omitted).
-// Shows only non-sensitive booking/payment summary.
-//
-// When a real payment provider adapter is connected, this page will
-// display a checkout button or dynamic QR. Until then it shows a placeholder.
+// Does not expose customer PII (name, contact number, birth date, topic
+// omitted). Shows only non-sensitive booking/payment summary. The slip is
+// verified server-side via /api/pay/[token]/slip — no secret and no provider
+// detail ever reaches this page.
 import Link from "next/link";
 import { getPaymentOrderByCheckoutToken } from "@/lib/payments/payment-orders";
+import { paymentConfig, slipVerificationConfig } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { SlipUpload } from "./SlipUpload";
 
 export const dynamic = "force-dynamic";
 
@@ -142,7 +142,7 @@ export default async function PayPage({
         <div className="rounded-2xl border border-teal-100 bg-teal-50 p-5 text-center">
           <p className="font-semibold text-teal-800">ชำระเงินสำเร็จแล้ว</p>
           <p className="mt-1 text-sm text-teal-700">
-            ทีมงานจะยืนยันคิวของคุณเร็วๆ นี้
+            สถานะคิวของคุณแสดงในหัวข้อ &ldquo;สถานะการจอง&rdquo; ด้านบน
           </p>
         </div>
       ) : isExpiredOrClosed ? (
@@ -156,18 +156,62 @@ export default async function PayPage({
           </Link>
         </div>
       ) : (
-        // Placeholder: payment channel not yet connected.
+        <PayableSection token={token} />
+      )}
+    </main>
+  );
+}
+
+// Payment instructions + slip upload. Server component: reads env config
+// only to decide WHAT to render — no secret is passed to the client.
+function PayableSection({ token }: { token: string }) {
+  const cfg = paymentConfig();
+  const hasBankDetails = Boolean(
+    cfg.bankName && cfg.accountName && cfg.accountNumber,
+  );
+  const hasQR = Boolean(cfg.qrPath);
+  const qrSrc = cfg.qrPath.startsWith("/") ? cfg.qrPath : `/${cfg.qrPath}`;
+  const slipCfg = slipVerificationConfig();
+  const autoVerifyReady = Boolean(
+    slipCfg.easySlipApiKey && slipCfg.receiverAccounts.length > 0,
+  );
+
+  return (
+    <>
+      {hasBankDetails && (
+        <div className="mb-5 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+          <h2 className="mb-4 font-bold">โอนเงินผ่าน PromptPay / บัญชีธนาคาร</h2>
+          {hasQR && (
+            <div className="mb-5 flex justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={qrSrc}
+                alt="QR Code สำหรับโอนเงิน"
+                width={220}
+                height={220}
+                className="rounded-xl border border-gray-200"
+              />
+            </div>
+          )}
+          <dl className="space-y-3">
+            <Row label="ธนาคาร" value={cfg.bankName} />
+            <Row label="ชื่อบัญชี" value={cfg.accountName} />
+            <Row label="เลขบัญชี" value={cfg.accountNumber} />
+          </dl>
+        </div>
+      )}
+
+      {autoVerifyReady ? (
+        <SlipUpload token={token} />
+      ) : (
         <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 text-center">
-          <p className="font-semibold text-amber-800">
-            กำลังเตรียมช่องทางชำระเงิน
-          </p>
+          <p className="font-semibold text-amber-800">ส่งสลิปให้ทีมงาน</p>
           <p className="mt-2 text-sm text-amber-700">
-            ระบบชำระเงินออนไลน์อยู่ระหว่างการเชื่อมต่อ
-            กรุณาชำระผ่านช่องทางปกติตามที่ได้รับแจ้ง
+            โอนแล้วส่งสลิปให้ทีมงานทาง LINE เพื่อยืนยันคิวของคุณ
           </p>
         </div>
       )}
-    </main>
+    </>
   );
 }
 

@@ -232,10 +232,13 @@ assert.doesNotMatch(migration, /security definer/i, "no SECURITY DEFINER expecte
 // Application layer: /pay/[token] page must not expose PII or accept money
 // ===========================================================================
 const payPage = readSrc("app/pay/[token]/page.tsx");
-// Must not import or call real payment provider APIs.
-assert.doesNotMatch(payPage, /\b(kbank|kgp|omise|stripe|promptpay)\b/i, "/pay page must not reference real payment providers");
-// Must not accept payment.
-assert.doesNotMatch(payPage, /mark.*paid|accept.*payment|process.*payment/i, "/pay page must not accept money");
+// Must not import or call unapproved payment gateway APIs. (PromptPay bank
+// transfer + slip verification is the approved Phase 1 channel; gateway
+// providers below remain out of scope.)
+assert.doesNotMatch(payPage, /\b(kbank|kgp|omise|stripe)\b/i, "/pay page must not reference unapproved payment gateways");
+// Must not mark anything paid itself — confirmation happens only through the
+// server route -> confirm_slip_payment RPC.
+assert.doesNotMatch(payPage, /mark.*paid|process.*payment/i, "/pay page must not mark payments paid");
 // Must not expose PII fields.
 assert.doesNotMatch(payPage, /\bnickname\b|\bphone\b|\bbirth_date_text\b/, "/pay page must not expose customer PII");
 
