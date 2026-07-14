@@ -20,5 +20,19 @@ export async function POST(req: Request) {
     return new NextResponse("Invalid signature", { status: 401 });
   }
 
+  // TEMP: capture LINE group IDs for env config (remove after collecting).
+  try {
+    const body = JSON.parse(rawBody) as {
+      events?: Array<{ source?: { type?: string; groupId?: string } }>;
+    };
+    for (const event of body.events ?? []) {
+      if (event.source?.type === "group") {
+        console.log("[LINE_BOOKING_GROUP_ID]", event.source.groupId);
+      }
+    }
+  } catch {
+    // ignore malformed payloads; still acknowledge receipt
+  }
+
   return NextResponse.json({ ok: true });
 }
