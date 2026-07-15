@@ -27,7 +27,7 @@ export const serverEnv = {
     return required("LINE_CHANNEL_ACCESS_TOKEN");
   },
   get notifyGroupId() {
-    return required("LINE_BOOKING_NOTIFY_GROUP_ID");
+    return required("LINE_BOOKING_GROUP_ID");
   },
   // Used to HMAC the client IP for DB-backed rate limiting. Required when
   // POST /api/bookings is reachable (the route returns a 500 config error if

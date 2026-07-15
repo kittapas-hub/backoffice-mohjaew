@@ -10,7 +10,11 @@ import type { PushResult } from "../line.ts";
 // real Supabase client, pushMessage, and Date.now().
 // 'slip_manual_review' (Phase 1 slip automation, 0011_slip_verification.sql):
 // a verified payment landed on an ineligible booking and needs a human.
-export const EVENT_TYPES = ["payment_received", "slip_manual_review"];
+// 'booking_confirmed' (0012_booking_confirmed_notification.sql): a booking
+// summary, enqueued exactly once per booking regardless of which of the
+// three confirmation paths (admin override / manual review approval /
+// EasySlip automatic) reached 'confirmed' first.
+export const EVENT_TYPES = ["payment_received", "slip_manual_review", "booking_confirmed"];
 export const DEFAULT_BATCH = 20;
 export const TIME_BUDGET_MS = 50_000;
 
@@ -24,6 +28,12 @@ export type ClaimedRow = {
   idempotency_key: string;
   attempt_count: number;
   line_retry_key: string;
+  // Stable per-row key for the image push, distinct from line_retry_key
+  // (0012_booking_confirmed_notification.sql). Never regenerated per
+  // attempt — reused on every retry so a crash after LINE accepts the image
+  // but before completion commits can never resend a distinct, undeduped
+  // image on the next claim.
+  image_retry_key: string;
 };
 
 // Renders strictly from the fields process_payment_paid_event actually
@@ -52,11 +62,45 @@ export function renderSlipManualReviewMessage(row: ClaimedRow): string {
   ].join("\n");
 }
 
+function field(payload: Record<string, unknown> | null, key: string): string {
+  const v = payload?.[key];
+  return typeof v === "string" || typeof v === "number" ? String(v) : "-";
+}
+
+// Renders strictly from the fields the transition_slot_booking /
+// confirm_slip_payment / approve_manual_review_payment 'confirmed' paths
+// actually write (0012_booking_confirmed_notification.sql) — no invented
+// fields.
+export function renderBookingConfirmedMessage(row: ClaimedRow): string {
+  const p = row.payload;
+  return [
+    "ยืนยันการจองคิวแล้ว",
+    `เลขอ้างอิง: ${field(p, "reference_code")}`,
+    `ชื่อ: ${field(p, "customer_name")}`,
+    `วันเกิด: ${field(p, "birth_date")}`,
+    `หัวข้อ: ${field(p, "consultation_topic")}`,
+    `โทร: ${field(p, "phone")}`,
+    `วันที่จอง: ${field(p, "booking_date")}`,
+    `เวลา: ${field(p, "session_time")}`,
+    `ลำดับคิว: ${field(p, "queue_number")}`,
+    `ยืนยันโดย: ${field(p, "confirmation_method")}`,
+    `อัปเดตล่าสุด: ${field(p, "updated_at")}`,
+  ].join("\n");
+}
+
 export function renderMessage(row: ClaimedRow): string {
   if (row.event_type === "slip_manual_review") {
     return renderSlipManualReviewMessage(row);
   }
+  if (row.event_type === "booking_confirmed") {
+    return renderBookingConfirmedMessage(row);
+  }
   return renderPaymentReceivedMessage(row);
+}
+
+function imageStoragePath(row: ClaimedRow): string | null {
+  const v = row.payload?.image_storage_path;
+  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 export type RpcResult = { data: unknown; error: { message: string } | null };
@@ -64,6 +108,11 @@ export type RpcResult = { data: unknown; error: { message: string } | null };
 export type Deps = {
   db: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<RpcResult> };
   sendPush: (to: string, text: string, retryKey: string) => Promise<PushResult>;
+  // Both optional: only booking_confirmed rows with an image_storage_path in
+  // their payload ever use these. Omitting them just means no image is
+  // attempted — the text summary is unaffected either way.
+  sendImage?: (to: string, imageUrl: string, retryKey: string) => Promise<PushResult>;
+  signFaceUrl?: (storagePath: string) => Promise<string | null>;
   groupId: string;
   now: () => number;
   batch: number;
@@ -110,6 +159,25 @@ async function completeDelivery(
   return "fence_lost";
 }
 
+// Signs and sends the face image for a confirmed booking. Swallows every
+// failure (signing error, send error, or a retryable/permanent push
+// rejection) behind a single fixed log literal — never the storage path,
+// signed URL, or group id — since image delivery is best-effort and must
+// never affect the row's retry/dead outcome.
+async function sendImageBestEffort(deps: Deps, row: ClaimedRow): Promise<void> {
+  if (!deps.signFaceUrl || !deps.sendImage) return;
+  const path = imageStoragePath(row);
+  if (!path) return;
+  try {
+    const url = await deps.signFaceUrl(path);
+    if (!url) return;
+    const result = await deps.sendImage(deps.groupId, url, row.image_retry_key);
+    if (!result.ok) console.error("notification_image_send_failed");
+  } catch {
+    console.error("notification_image_send_failed");
+  }
+}
+
 export async function runDeliveryWorker(deps: Deps): Promise<WorkerOutcome> {
   const workerId = crypto.randomUUID();
   const startedAt = deps.now();
@@ -148,6 +216,14 @@ export async function runDeliveryWorker(deps: Deps): Promise<WorkerOutcome> {
 
       const outcome: CompletionOutcome = push.ok ? "sent" : push.retryable ? "retry" : "dead";
       const errorCode = push.ok ? undefined : push.error;
+
+      // Best-effort image, only once the text summary is confirmed sent.
+      // Never affects outcome/retry — a missing or failed image must never
+      // cause the text summary to be resent.
+      if (push.ok) {
+        await sendImageBestEffort(deps, row);
+      }
+
       const status = await completeDelivery(deps, workerId, row.id, outcome, errorCode);
 
       if (status === "failed") {
