@@ -3,6 +3,21 @@ import { serverEnv } from "./env.ts";
 
 const API = "https://api.line.me/v2/bot";
 
+// LINE group IDs are exactly "C" + 32 lowercase hex characters. userId (U…)
+// and roomId (R…) are a different LINE source type — this app only ever
+// notifies a group, never a user or room, so those must be rejected, not
+// silently accepted as if they were interchangeable. No fallback: an
+// invalid/blank/whitespace value returns null and the caller must treat that
+// exactly like "not configured" (fail closed, skip — never send elsewhere).
+const LINE_GROUP_ID_RE = /^C[0-9a-fA-F]{32}$/;
+
+export function validateLineGroupId(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!LINE_GROUP_ID_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
 // Verify x-line-signature against the RAW request body (HMAC-SHA256, base64).
 export function verifyLineSignature(rawBody: string, signature: string | null): boolean {
   if (!signature) return false;
@@ -54,16 +69,49 @@ export async function pushMessage(
   return { ok: false, retryable, error: `line_push_failed_${res.status}` };
 }
 
+// Same retry-key/409-as-success/retryable classification as pushMessage, for
+// an image instead of text. Used by the durable delivery worker
+// (outbox-driven), unlike the fire-and-forget notifyTeamImageSafe below.
+export async function pushImageMessage(
+  to: string,
+  imageUrl: string,
+  retryKey: string = crypto.randomUUID(),
+): Promise<PushResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${API}/message/push`, {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/json",
+        "X-Line-Retry-Key": retryKey,
+      },
+      body: JSON.stringify({
+        to,
+        messages: [{ type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl }],
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return { ok: false, retryable: true, error: "network_error" };
+  }
+
+  if (res.ok || res.status === 409) return { ok: true };
+
+  const retryable = res.status === 429 || res.status >= 500;
+  return { ok: false, retryable, error: `line_push_failed_${res.status}` };
+}
+
 // Non-fatal team notification. Never throws: if LINE isn't configured yet,
 // it logs and reports skipped so a booking is never blocked by missing env.
 export async function notifyTeamSafe(
   text: string,
 ): Promise<{ ok: boolean; skipped?: boolean; status?: number }> {
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  const groupId = process.env.LINE_BOOKING_NOTIFY_GROUP_ID;
+  const groupId = validateLineGroupId(process.env.LINE_BOOKING_GROUP_ID);
   if (!token || !groupId) {
     console.warn(
-      "[line] team notify skipped: missing LINE_CHANNEL_ACCESS_TOKEN or LINE_BOOKING_NOTIFY_GROUP_ID",
+      "[line] team notify skipped: missing/invalid LINE_CHANNEL_ACCESS_TOKEN or LINE_BOOKING_GROUP_ID",
     );
     return { ok: false, skipped: true };
   }
@@ -89,7 +137,7 @@ export async function notifyTeamImageSafe(
   imageUrl: string,
 ): Promise<{ ok: boolean; skipped?: boolean }> {
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  const groupId = process.env.LINE_BOOKING_NOTIFY_GROUP_ID;
+  const groupId = validateLineGroupId(process.env.LINE_BOOKING_GROUP_ID);
   if (!token || !groupId) return { ok: false, skipped: true };
   try {
     const res = await fetch(`${API}/message/push`, {

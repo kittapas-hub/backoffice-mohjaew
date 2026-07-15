@@ -12,7 +12,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { PushResult } from "../line.ts";
-import { runDeliveryWorker, renderPaymentReceivedMessage, type ClaimedRow } from "./delivery-worker.ts";
+import {
+  runDeliveryWorker,
+  renderPaymentReceivedMessage,
+  renderBookingConfirmedMessage,
+  EVENT_TYPES,
+  type ClaimedRow,
+} from "./delivery-worker.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const routeSrc = readFileSync(
@@ -40,12 +46,20 @@ assert.ok(
 );
 
 assert.match(routeSrc, /LINE_CHANNEL_ACCESS_TOKEN/, "must require LINE_CHANNEL_ACCESS_TOKEN");
-assert.match(routeSrc, /LINE_BOOKING_NOTIFY_GROUP_ID/, "must require LINE_BOOKING_NOTIFY_GROUP_ID");
+assert.match(routeSrc, /LINE_BOOKING_GROUP_ID/, "must require LINE_BOOKING_GROUP_ID");
+// The group id must be run through the format validator (trims, rejects
+// blank/malformed/userId/roomId, no fallback) — never used raw from env.
+assert.match(routeSrc, /validateLineGroupId\(process\.env\.LINE_BOOKING_GROUP_ID\)/, "must validate the group id format, not read it raw");
+assert.doesNotMatch(routeSrc, /groupId\s*=\s*process\.env\.LINE_BOOKING_GROUP_ID;/, "must not use the raw unvalidated env value as groupId");
 assert.ok(
   routeSrc.indexOf("line_not_configured") < routeSrc.indexOf("runDeliveryWorker("),
-  "missing LINE config must return before the worker (and any claim) runs",
+  "missing/invalid LINE config must return before the worker (and any claim) runs",
 );
-assert.match(routeSrc, /error: "line_not_configured"[\s\S]*?status: 503/, "missing LINE config must return 503");
+assert.ok(
+  routeSrc.indexOf("validateLineGroupId(process.env.LINE_BOOKING_GROUP_ID)") < routeSrc.indexOf("runDeliveryWorker("),
+  "group id validation must happen before the worker (and any claim) runs — fail closed before claiming rows",
+);
+assert.match(routeSrc, /error: "line_not_configured"[\s\S]*?status: 503/, "missing/invalid LINE config must return 503");
 
 // A claim/completion RPC failure must surface as a 500, never a silent 200.
 assert.match(
@@ -87,12 +101,25 @@ assert.doesNotMatch(
 // confirm_slip_payment writes) — never amount/name/phone.
 const reviewFnSrc = workerSrc.slice(
   workerSrc.indexOf("export function renderSlipManualReviewMessage"),
-  workerSrc.indexOf("export function renderMessage"),
+  workerSrc.indexOf("function field("),
 );
 assert.doesNotMatch(
   reviewFnSrc,
   /row\.(amount|customer_name|phone)\b|payload\?\.(amount|customer_name|phone)\b/,
   "slip_manual_review renderer must not invent fields absent from its payload",
+);
+
+// renderBookingConfirmedMessage must only read payload fields via the field()
+// helper (which safely defaults to "-"), never raw `.payload.x` access that
+// could throw on a missing key.
+const confirmedRenderFnSrc = workerSrc.slice(
+  workerSrc.indexOf("export function renderBookingConfirmedMessage"),
+  workerSrc.indexOf("export function renderMessage"),
+);
+assert.doesNotMatch(
+  confirmedRenderFnSrc,
+  /\bp\.\w/,
+  "renderBookingConfirmedMessage must access payload fields only through field(), never p.<key>",
 );
 
 function makeRow(id: string): ClaimedRow {
@@ -106,6 +133,7 @@ function makeRow(id: string): ClaimedRow {
     idempotency_key: `pay:received:team:order-${id}`,
     attempt_count: 0,
     line_retry_key: "11111111-1111-4111-8111-111111111111",
+    image_retry_key: "11111111-2222-4222-8222-111111111111",
   };
 }
 
@@ -118,6 +146,70 @@ function makeRow(id: string): ClaimedRow {
   // "แจ้งเตือน: ได้รับการชำระเงินแล้ว", not merely "look right" in an editor.
   const firstLine = text.split("\n")[0];
   assert.equal(firstLine, "แจ้งเตือน: ได้รับการชำระเงินแล้ว");
+}
+
+// makeConfirmedRow: mirrors the exact payload shape written by
+// 0012_booking_confirmed_notification.sql — no invented fields.
+function makeConfirmedRow(id: string, opts: { imagePath?: string | null } = {}): ClaimedRow {
+  return {
+    id,
+    booking_id: `booking-${id}`,
+    payment_order_id: null,
+    channel: "line",
+    event_type: "booking_confirmed",
+    payload: {
+      booking_id: `booking-${id}`,
+      reference_code: "ABCD1234",
+      customer_name: "สมชาย",
+      birth_date: "1990-01-01",
+      consultation_topic: "การงาน",
+      phone: "0812345678",
+      booking_date: "2026-07-20",
+      session_time: "09:00–12:00 (เช้า)",
+      queue_number: 3,
+      confirmation_method: "easyslip_auto",
+      updated_at: "2026-07-14T10:00:00Z",
+      image_storage_path: "imagePath" in opts ? opts.imagePath : `booking-${id}/face.jpg`,
+    },
+    idempotency_key: `booking:confirmed:team:booking-${id}`,
+    attempt_count: 0,
+    line_retry_key: "22222222-2222-4222-8222-222222222222",
+    // Deliberately a different value from line_retry_key above — text and
+    // image must never share a retry key.
+    image_retry_key: "33333333-3333-4333-8333-333333333333",
+  };
+}
+
+// Sanity check on the fixture itself: text and image retry keys must differ.
+assert.notEqual(
+  makeConfirmedRow("sanity").line_retry_key,
+  makeConfirmedRow("sanity").image_retry_key,
+  "line_retry_key and image_retry_key must be distinct values",
+);
+
+{
+  const text = renderBookingConfirmedMessage(makeConfirmedRow("xyz"));
+  assert.match(text, /ABCD1234/);
+  assert.match(text, /สมชาย/);
+  assert.match(text, /1990-01-01/);
+  assert.match(text, /การงาน/);
+  assert.match(text, /0812345678/);
+  assert.match(text, /2026-07-20/);
+  assert.match(text, /09:00–12:00/);
+  assert.match(text, /3/);
+  assert.match(text, /easyslip_auto/);
+  assert.match(text, /2026-07-14T10:00:00Z/);
+  assert.equal(text.split("\n")[0], "ยืนยันการจองคิวแล้ว");
+}
+
+// renderBookingConfirmedMessage must fall back to "-" for absent fields
+// rather than throwing or printing "undefined".
+{
+  const row = makeConfirmedRow("missing", { imagePath: null });
+  row.payload = { booking_id: row.booking_id };
+  const text = renderBookingConfirmedMessage(row);
+  assert.doesNotMatch(text, /undefined/);
+  assert.match(text, /เลขอ้างอิง: -/);
 }
 
 // --- console.error capture helper for privacy assertions --------------------
@@ -137,7 +229,8 @@ function captureConsoleErrors<T>(fn: () => Promise<T>): Promise<{ result: T; log
 type FakeCall = { fn: string; args: Record<string, unknown> };
 
 // ===========================================================================
-// runDeliveryWorker: payment_received-only is passed to the claim RPC
+// runDeliveryWorker: payment_received, slip_manual_review, and
+// booking_confirmed are passed to the claim RPC — never any other event type.
 // ===========================================================================
 {
   const calls: FakeCall[] = [];
@@ -161,7 +254,9 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
   assert.deepEqual(calls[0].args.p_event_types, [
     "payment_received",
     "slip_manual_review",
+    "booking_confirmed",
   ]);
+  assert.deepEqual(EVENT_TYPES, ["payment_received", "slip_manual_review", "booking_confirmed"]);
 }
 
 // ===========================================================================
@@ -426,6 +521,248 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
   assert.ok(
     logs.filter((args) => args.length === 1 && args[0] === "notification_completion_fence_lost").length === 2,
   );
+}
+
+// ===========================================================================
+// runDeliveryWorker: booking_confirmed row with an image_storage_path sends
+// text (with its stable line_retry_key) THEN signs + sends the image (with
+// its OWN stable image_retry_key — never the text's key), both addressed to
+// the same groupId (never a customer/different recipient).
+// ===========================================================================
+{
+  const calls: FakeCall[] = [];
+  let claimCount = 0;
+  const pushedTo: string[] = [];
+  const pushedRetryKeys: string[] = [];
+  const signedPaths: string[] = [];
+  const imageSentTo: { to: string; url: string; retryKey: string }[] = [];
+  const db = {
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      calls.push({ fn, args });
+      if (fn === "claim_team_notification_deliveries") {
+        claimCount++;
+        if (claimCount === 1) return { data: [makeConfirmedRow("1")], error: null };
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const result = await runDeliveryWorker({
+    db,
+    sendPush: async (to, text, retryKey) => {
+      pushedTo.push(to);
+      pushedRetryKeys.push(retryKey);
+      assert.match(text, /ยืนยันการจองคิวแล้ว/);
+      return { ok: true };
+    },
+    signFaceUrl: async (path) => {
+      signedPaths.push(path);
+      return `https://signed.example/${path}`;
+    },
+    sendImage: async (to, url, retryKey) => {
+      imageSentTo.push({ to, url, retryKey });
+      return { ok: true };
+    },
+    groupId: "correct-group-id",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
+  assert.deepEqual(pushedTo, ["correct-group-id"]);
+  assert.deepEqual(pushedRetryKeys, ["22222222-2222-4222-8222-222222222222"]);
+  assert.deepEqual(signedPaths, ["booking-1/face.jpg"]);
+  assert.deepEqual(imageSentTo, [
+    {
+      to: "correct-group-id",
+      url: "https://signed.example/booking-1/face.jpg",
+      retryKey: "33333333-3333-4333-8333-333333333333",
+    },
+  ]);
+  assert.notEqual(pushedRetryKeys[0], imageSentTo[0].retryKey, "text and image must use different retry keys");
+
+  const completion = calls.find((c) => c.fn === "complete_notification_delivery");
+  assert.equal(completion?.args.p_outcome, "sent");
+}
+
+// ===========================================================================
+// runDeliveryWorker: the image retry key is STABLE across separate claims of
+// the same row (e.g. a stale-lease reclaim after a crash between LINE
+// accepting the image and complete_notification_delivery committing) — it
+// is never regenerated per attempt, since the row's image_retry_key column
+// is fixed at insert time and simply passed through on every claim.
+// ===========================================================================
+{
+  const seenRetryKeys: string[] = [];
+  let claimCount = 0;
+  const db = {
+    rpc: async (fn: string) => {
+      if (fn === "claim_team_notification_deliveries") {
+        claimCount++;
+        // Simulate two separate claims of the identical row (same
+        // image_retry_key each time, as the DB column would provide).
+        if (claimCount <= 2) return { data: [makeConfirmedRow("stable")], error: null };
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  await runDeliveryWorker({
+    db,
+    sendPush: async () => ({ ok: true }),
+    signFaceUrl: async (path) => `https://signed.example/${path}`,
+    sendImage: async (_to, _url, retryKey) => {
+      seenRetryKeys.push(retryKey);
+      return { ok: true };
+    },
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(seenRetryKeys, [
+    "33333333-3333-4333-8333-333333333333",
+    "33333333-3333-4333-8333-333333333333",
+  ]);
+}
+
+// ===========================================================================
+// runDeliveryWorker: booking_confirmed row with no image_storage_path sends
+// text only — signFaceUrl/sendImage are never called.
+// ===========================================================================
+{
+  let claimCount = 0;
+  let signCalled = false;
+  let imageCalled = false;
+  const db = {
+    rpc: async (fn: string) => {
+      if (fn === "claim_team_notification_deliveries") {
+        claimCount++;
+        if (claimCount === 1) return { data: [makeConfirmedRow("1", { imagePath: null })], error: null };
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const result = await runDeliveryWorker({
+    db,
+    sendPush: async () => ({ ok: true }),
+    signFaceUrl: async (path) => {
+      signCalled = true;
+      return `https://signed.example/${path}`;
+    },
+    sendImage: async () => {
+      imageCalled = true;
+      return { ok: true };
+    },
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
+  assert.equal(signCalled, false);
+  assert.equal(imageCalled, false);
+}
+
+// ===========================================================================
+// runDeliveryWorker: booking_confirmed row also works with signFaceUrl/
+// sendImage entirely omitted (route always supplies them, but the worker
+// must not crash if it doesn't) — text still sends.
+// ===========================================================================
+{
+  let claimCount = 0;
+  const db = {
+    rpc: async (fn: string) => {
+      if (fn === "claim_team_notification_deliveries") {
+        claimCount++;
+        if (claimCount === 1) return { data: [makeConfirmedRow("1")], error: null };
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const result = await runDeliveryWorker({
+    db,
+    sendPush: async () => ({ ok: true }),
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
+}
+
+// ===========================================================================
+// runDeliveryWorker: image signing/send failure never affects the row's
+// outcome — text was already sent, so it must be recorded 'sent', not
+// retried, and the failure must be logged behind a single fixed literal
+// (never the storage path, signed URL, or group id).
+// ===========================================================================
+{
+  let claimCount = 0;
+  const db = {
+    rpc: async (fn: string) => {
+      if (fn === "claim_team_notification_deliveries") {
+        claimCount++;
+        if (claimCount === 1) return { data: [makeConfirmedRow("1")], error: null };
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const { result, logs } = await captureConsoleErrors(() =>
+    runDeliveryWorker({
+      db,
+      sendPush: async () => ({ ok: true }),
+      signFaceUrl: async () => {
+        throw new Error("leaked-signing-detail-secret-path");
+      },
+      sendImage: async () => ({ ok: true }),
+      groupId: "group",
+      now: () => 0,
+      batch: 20,
+      timeBudgetMs: 50_000,
+    }),
+  );
+  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
+  for (const args of logs) {
+    assert.doesNotMatch(JSON.stringify(args), /leaked-signing-detail-secret-path/);
+  }
+  assert.ok(logs.some((args) => args.length === 1 && args[0] === "notification_image_send_failed"));
+}
+
+// ===========================================================================
+// runDeliveryWorker: a retryable LINE failure on a booking_confirmed row
+// only ever touches notification_deliveries (via complete_notification_delivery)
+// — the worker never issues an RPC against bookings/transition_slot_booking/
+// confirm_slip_payment/approve_manual_review_payment, so a LINE outage can
+// never affect booking status.
+// ===========================================================================
+{
+  const calls: FakeCall[] = [];
+  let claimCount = 0;
+  const db = {
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      calls.push({ fn, args });
+      if (fn === "claim_team_notification_deliveries") {
+        claimCount++;
+        if (claimCount === 1) return { data: [makeConfirmedRow("1")], error: null };
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const result = await runDeliveryWorker({
+    db,
+    sendPush: async () => ({ ok: false, retryable: true, error: "line_push_failed_500" }),
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(result, { ok: true, processed: 1, sent: 0, retried: 1, dead: 0 });
+  assert.ok(calls.every((c) => c.fn === "claim_team_notification_deliveries" || c.fn === "complete_notification_delivery"));
 }
 
 console.log("delivery-worker self-check passed");
