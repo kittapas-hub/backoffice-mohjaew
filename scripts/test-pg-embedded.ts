@@ -34,6 +34,7 @@ const DIR_REMOVE_DELAY_MS = 500;
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MIGRATIONS_DIR = join(REPO_ROOT, "supabase", "migrations");
+const SUPABASE_DIR = join(REPO_ROOT, "supabase");
 const DB_NAME = "mohjaew_test";
 const PORT = 55433;
 
@@ -122,6 +123,11 @@ try {
     console.log(`[test-pg-embedded] applying ${name}...`);
     await client.query(readFileSync(join(MIGRATIONS_DIR, name), "utf8"));
   }
+  // Supabase grants service_role table access as part of its platform
+  // baseline. Plain embedded PostgreSQL has no such defaults, so reproduce
+  // that baseline explicitly before running the Production ACL preflights.
+  console.log("[test-pg-embedded] applying Supabase service_role table-access baseline...");
+  await client.query("grant select, insert, update, delete on all tables in schema public to service_role");
 
   console.log("[test-pg-embedded] seeding verified legacy baseline for 0010 (384 slots / 32 dates)...");
   await client.query(`
@@ -176,14 +182,36 @@ try {
   }
   console.log("[test-pg-embedded] baseline verified: 384 legacy open slots, 32 dates, 0 canonical rows, 0 bookings.");
 
-  for (const name of [
-    "0010_reconcile_0006_0009.sql",
-    "0011_slip_verification.sql",
-    "0012_booking_confirmed_notification.sql",
-  ]) {
+  const applyMigration = async (name: string) => {
     console.log(`[test-pg-embedded] applying ${name}...`);
     await client.query(readFileSync(join(MIGRATIONS_DIR, name), "utf8"));
+  };
+  const runPassFailVerifier = async (name: string) => {
+    console.log(`[test-pg-embedded] running ${name}...`);
+    const result = await client.query(readFileSync(join(SUPABASE_DIR, name), "utf8"));
+    const failed = result.rows.filter((row) => row.status !== "PASS");
+    if (failed.length > 0) {
+      throw new Error(`${name} reported failures: ${JSON.stringify(failed)}`);
+    }
+    console.log(`[test-pg-embedded] ${name}: ${result.rows.length} PASS rows`);
+  };
+
+  await applyMigration("0010_reconcile_0006_0009.sql");
+  const reconciliationReport = await client.query(
+    readFileSync(join(SUPABASE_DIR, "verify_0010_reconciliation.sql"), "utf8"),
+  );
+  if (reconciliationReport.rows.length !== 4) {
+    throw new Error(`verify_0010_reconciliation.sql returned ${reconciliationReport.rows.length} sections, expected 4`);
   }
+  console.log("[test-pg-embedded] verify_0010_reconciliation.sql: 4 read-only report sections");
+  await runPassFailVerifier("verify_0011_production_preflight.sql");
+
+  await applyMigration("0011_slip_verification.sql");
+  await runPassFailVerifier("verify_0011_post_migration.sql");
+  await runPassFailVerifier("verify_0012_production_preflight.sql");
+
+  await applyMigration("0012_booking_confirmed_notification.sql");
+  await runPassFailVerifier("verify_0012_post_migration.sql");
   console.log("[test-pg-embedded] all migrations 0001-0012 applied successfully.");
 
   await client.end();

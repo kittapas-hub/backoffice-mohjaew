@@ -17,6 +17,10 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { easySlipProvider } from "@/lib/payments/slip/easyslip";
 import { evaluateSlipPolicy, receiverMatches } from "@/lib/payments/slip/policy";
 import {
+  fileFitsBeforeBuffering,
+  validateUploadContentLength,
+} from "@/lib/payments/slip/upload-guard";
+import {
   confirmSlipPayment,
   countSlipAttempts,
   recordSlipRejection,
@@ -71,18 +75,23 @@ export async function POST(
     });
   }
 
-  // Parse form + honeypot.
-  let form: FormData;
-  try {
-    form = await req.formData();
-  } catch {
-    return fail(400, { error: "invalid_request", message: "คำขอไม่ถูกต้อง" });
-  }
-  if (String(form.get("company") ?? "").trim() !== "") {
-    return fail(400, { error: "invalid_input", message: "ข้อมูลไม่ถูกต้อง" });
+  // Reject absent, ambiguous, or known-oversized bodies before multipart
+  // parsing. The file has a tighter 4 MiB limit below; this request allowance
+  // only covers multipart framing. Vercel currently documents a 4.5 MB
+  // function request limit, but this guard also protects self-hosted runtime.
+  const lengthDecision = validateUploadContentLength(req.headers.get("content-length"));
+  if (!lengthDecision.ok) {
+    if (lengthDecision.reason === "too_large") {
+      return fail(413, { error: "request_too_large", message: "รูปต้องมีขนาดไม่เกิน 4 MB" });
+    }
+    return fail(lengthDecision.reason === "missing" ? 411 : 400, {
+      error: "invalid_content_length",
+      message: "คำขอไม่ถูกต้อง",
+    });
   }
 
-  // Cross-instance rate limit by hashed IP (no raw IP stored).
+  // Cross-instance rate limit by hashed IP (no raw IP stored). This is before
+  // formData(), buffer allocation, database order lookup, and provider calls.
   const ipHmac = crypto
     .createHmac("sha256", rateSecret)
     .update(`slip-upload:${clientIp(req)}`)
@@ -99,6 +108,17 @@ export async function POST(
     });
   }
 
+  // Parse form only after the cheap whole-request and rate-limit gates.
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return fail(400, { error: "invalid_request", message: "คำขอไม่ถูกต้อง" });
+  }
+  if (String(form.get("company") ?? "").trim() !== "") {
+    return fail(400, { error: "invalid_input", message: "ข้อมูลไม่ถูกต้อง" });
+  }
+
   // Validate the file: presence, size, REAL signature and dimensions.
   const file = form.get("file");
   if (!(file instanceof File)) {
@@ -107,12 +127,18 @@ export async function POST(
   if (!ALLOWED_TYPES.has(file.type)) {
     return fail(400, { error: "invalid_type", message: "รองรับเฉพาะ JPG, PNG, WebP" });
   }
+  // File.size is metadata already parsed by FormData; reject before allocating
+  // the second in-memory copy created by arrayBuffer(). Byte validation below
+  // remains authoritative for actual type and dimensions.
+  if (!fileFitsBeforeBuffering(file.size)) {
+    return fail(413, { error: "invalid_image", message: "รูปต้องมีขนาดไม่เกิน 4 MB" });
+  }
   const image = Buffer.from(await file.arrayBuffer());
   const imgCheck = validateSlipImage(image);
   if (!imgCheck.ok) {
     const message =
       imgCheck.error === "too_large"
-        ? "รูปต้องมีขนาดไม่เกิน 5 MB"
+        ? "รูปต้องมีขนาดไม่เกิน 4 MB"
         : "ไฟล์ไม่ใช่รูปภาพที่ถูกต้อง กรุณาเลือกรูปสลิปใหม่";
     return fail(400, { error: "invalid_image", message });
   }
@@ -200,7 +226,8 @@ export async function POST(
     });
   }
 
-  // Trusted policy checks (amount + duplicate checks live inside the RPC).
+  // Trusted policy checks. Provider duplicates fail here; the independent
+  // local (provider, normalized_tx_ref) uniqueness check remains in the RPC.
   const decision = evaluateSlipPolicy(verified.slip);
   if (!decision.ok) {
     await recordSlipRejection({
@@ -221,6 +248,12 @@ export async function POST(
       receiver_mismatch: `บัญชีผู้รับในสลิปไม่ตรงกับบัญชีร้าน กรุณาตรวจสอบว่าโอนถูกบัญชี หรือ${CONTACT_TEAM}`,
       timestamp_out_of_window: `เวลาโอนในสลิปอยู่นอกช่วงเวลาชำระของคิวนี้ ${CONTACT_TEAM}`,
     };
+    if (decision.code === "duplicate_tx") {
+      return fail(409, {
+        error: "duplicate_tx",
+        message: `สลิปนี้ถูกใช้ยืนยันรายการอื่นไปแล้ว ${CONTACT_TEAM}`,
+      });
+    }
     return fail(422, { error: decision.code, message: messages[decision.code] });
   }
 

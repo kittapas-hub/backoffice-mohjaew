@@ -113,6 +113,11 @@ function functionBody(name: string): string {
 const transitionBody = functionBody("transition_slot_booking");
 const confirmSlipBody = functionBody("confirm_slip_payment");
 const approveBody = functionBody("approve_manual_review_payment");
+assert.match(approveBody, /select \* into v_booking[\s\S]*?for update/, "manual approval must lock the booking");
+assert.match(approveBody, /hold_expires_at is null[\s\S]*?clock_timestamp\(\)[\s\S]*?raise exception 'hold_expired'/, "manual approval must reject an expired hold after locking");
+assert.match(approveBody, /select \* into v_slot[\s\S]*?for update/, "manual approval must lock the associated slot");
+assert.match(approveBody, /v_others >= v_slot\.capacity[\s\S]*?raise exception 'slot_full'/, "manual approval must not overbook a full slot");
+assert.match(confirmSlipBody, /hold_expires_at <= clock_timestamp\(\)/, "automatic confirmation must use a post-lock wall-clock expiry check");
 
 // transition_slot_booking: enqueue only inside the 'confirmed' branch, never
 // cancelled/expired/completed.
@@ -211,15 +216,16 @@ assert.match(
 // no partially-applied state.
 // ===========================================================================
 {
-  const beginIdx = migration.indexOf("\nbegin;\n");
+  const normalizedMigration = migration.replace(/\r\n?/g, "\n");
+  const beginIdx = normalizedMigration.indexOf("\nbegin;\n");
   assert.ok(beginIdx !== -1, "migration must open with an explicit begin;");
-  const firstCreate = migration.indexOf("create or replace function public.transition_slot_booking");
+  const firstCreate = normalizedMigration.indexOf("create or replace function public.transition_slot_booking");
   assert.ok(beginIdx < firstCreate, "begin; must precede the first statement");
 
-  const commitMatches = [...migration.matchAll(/\ncommit;\n/g)];
+  const commitMatches = [...normalizedMigration.matchAll(/\ncommit;\n/g)];
   assert.equal(commitMatches.length, 1, "migration must contain exactly one commit;");
   const commitIdx = commitMatches[0].index!;
-  const lastGrant = migration.lastIndexOf(
+  const lastGrant = normalizedMigration.lastIndexOf(
     "grant execute on function public.claim_team_notification_deliveries(text, int, text[]) to service_role;",
   );
   assert.ok(lastGrant !== -1 && lastGrant < commitIdx, "commit; must come after the final grant statement");
@@ -227,13 +233,13 @@ assert.match(
   // No begin/commit/rollback anywhere else in the file (the PL/pgSQL `begin`
   // ... `end;` blocks inside function bodies are a different, unrelated
   // keyword usage and must not be miscounted as transaction control).
-  const beginStatements = [...migration.matchAll(/^begin;$/gm)];
+  const beginStatements = [...normalizedMigration.matchAll(/^begin;$/gm)];
   assert.equal(beginStatements.length, 1, "exactly one top-level begin; statement");
-  assert.doesNotMatch(migration, /\brollback;/, "migration must never roll back on its own — only BEGIN/COMMIT wraps it");
+  assert.doesNotMatch(normalizedMigration, /\brollback;/, "migration must never roll back on its own — only BEGIN/COMMIT wraps it");
 
   // The rollback INSTRUCTIONS in the trailing comment come after commit; —
   // they are prose for a human, not part of the transaction.
-  const rollbackCommentIdx = migration.indexOf("-- ROLLBACK");
+  const rollbackCommentIdx = normalizedMigration.indexOf("-- ROLLBACK");
   assert.ok(rollbackCommentIdx > commitIdx, "the human ROLLBACK instructions must be documented after commit;, outside the transaction");
 }
 

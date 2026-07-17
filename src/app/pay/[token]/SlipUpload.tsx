@@ -11,7 +11,7 @@ type Phase = "idle" | "uploading" | "verifying" | "confirmed" | "error";
 
 type ServerFail = { error?: string; message?: string; retryable?: boolean };
 
-const MAX_BYTES = 5 * 1024 * 1024;
+const MAX_BYTES = 4 * 1024 * 1024;
 
 export function SlipUpload({ token }: { token: string }) {
   const router = useRouter();
@@ -30,7 +30,7 @@ export function SlipUpload({ token }: { token: string }) {
     if (file.size > MAX_BYTES) {
       setPhase("error");
       setRetryable(true);
-      setMessage("รูปต้องมีขนาดไม่เกิน 5 MB");
+      setMessage("รูปต้องมีขนาดไม่เกิน 4 MB");
       return;
     }
     setPhase("uploading");
@@ -86,7 +86,7 @@ export function SlipUpload({ token }: { token: string }) {
     <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
       <h2 className="mb-1 font-bold">อัปโหลดสลิปเพื่อยืนยันอัตโนมัติ</h2>
       <p className="mb-4 text-xs text-gray-500">
-        รองรับไฟล์ JPG, PNG, WebP ขนาดไม่เกิน 5 MB — ใช้รูปสลิปต้นฉบับจากแอปธนาคาร
+        รองรับไฟล์ JPG, PNG, WebP ขนาดไม่เกิน 4 MB — ใช้รูปสลิปต้นฉบับจากแอปธนาคาร
       </p>
 
       <input

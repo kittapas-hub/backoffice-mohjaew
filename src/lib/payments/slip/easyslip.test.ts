@@ -49,7 +49,13 @@ if (normalized.ok) {
   assert.equal(normalized.slip.amountSatang, 99900);
   assert.equal(normalized.slip.currency, "THB");
   assert.equal(normalized.slip.transferTimestamp?.toISOString(), "2026-07-13T04:50:00.000Z");
+  assert.equal(normalized.slip.duplicateSignal, false);
 }
+
+const providerDuplicate = structuredClone(SUCCESS);
+providerDuplicate.data.isDuplicate = true;
+const providerDuplicateResult = normalizeEasySlipBody(providerDuplicate);
+assert.ok(providerDuplicateResult.ok && providerDuplicateResult.slip.duplicateSignal === true);
 
 for (const mutate of [
   (x: typeof SUCCESS) => { delete (x.data.rawSlip as { date?: string }).date; },
@@ -57,6 +63,7 @@ for (const mutate of [
   (x: typeof SUCCESS) => { delete (x.data.rawSlip.amount.local as { currency?: string }).currency; },
   (x: typeof SUCCESS) => { delete (x.data as { amountInSlip?: number }).amountInSlip; },
   (x: typeof SUCCESS) => { delete (x.data as { matchedAccount?: unknown }).matchedAccount; },
+  (x: typeof SUCCESS) => { delete (x.data as { isDuplicate?: boolean }).isDuplicate; },
 ]) {
   const partial = structuredClone(SUCCESS);
   mutate(partial);

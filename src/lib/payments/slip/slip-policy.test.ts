@@ -19,4 +19,14 @@ assert.equal(receiverMatches({ ...receiver, nameTh: null }, profile), false);
 assert.equal(receiverMatches(receiver, { ...profile, names: [] }), false);
 assert.deepEqual(evaluateSlipPolicy(slip), { ok: true });
 assert.deepEqual(evaluateSlipPolicy({ ...slip, providerTransactionReference: " " }), { ok: false, code: "tx_ref_missing" });
+assert.deepEqual(
+  evaluateSlipPolicy({ ...slip, duplicateSignal: true }),
+  { ok: false, code: "duplicate_tx" },
+  "a provider-marked duplicate with an unseen local reference must be blocked",
+);
+assert.deepEqual(
+  evaluateSlipPolicy({ ...slip, duplicateSignal: null }),
+  { ok: false, code: "duplicate_tx" },
+  "a missing duplicate decision must fail closed",
+);
 console.log("slip-policy self-check passed");

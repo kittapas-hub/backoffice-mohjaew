@@ -7,6 +7,12 @@
 -- PROPOSED — do not apply without review. Run AFTER
 -- 0011_slip_verification.sql. Never auto-applied by this repo; apply
 -- manually via the Supabase SQL editor per the project's existing workflow.
+--
+-- Release-audit hardening note (2026-07-17): this candidate migration had not
+-- been applied to Production, so it was corrected in place before release.
+-- The manual-review path now rechecks the live hold and slot capacity under
+-- row locks, and automatic confirmation uses wall-clock expiry checks after
+-- its locks are acquired. Do not substitute the earlier candidate blob.
 -- Forward-only: this migration does not edit 0010_reconcile_0006_0009.sql or
 -- 0011_slip_verification.sql. It only issues `create or replace function`
 -- (and, for the two functions whose signature changes, `drop function` +
@@ -99,7 +105,7 @@ begin
     -- much room the slot has left. Checked before the capacity math below
     -- so it takes priority over 'slot_full'.
     if v_from = 'pending_payment'
-       and (v_booking.hold_expires_at is null or v_booking.hold_expires_at <= now())
+       and (v_booking.hold_expires_at is null or v_booking.hold_expires_at <= clock_timestamp())
     then
       raise exception 'hold_expired';
     end if;
@@ -114,7 +120,7 @@ begin
       or (
         v_booking.status = 'pending_payment'
         and v_booking.hold_expires_at is not null
-        and v_booking.hold_expires_at > now()
+        and v_booking.hold_expires_at > clock_timestamp()
       )
     );
     if not v_self_occupies then
@@ -123,7 +129,7 @@ begin
        where slot_id = v_booking.slot_id
          and id <> p_booking_id
          and (status in ('booked', 'confirmed', 'completed')
-              or (status = 'pending_payment' and hold_expires_at > now()));
+              or (status = 'pending_payment' and hold_expires_at > clock_timestamp()));
       if v_others >= v_slot.capacity then raise exception 'slot_full'; end if;
     end if;
     update public.bookings
@@ -254,9 +260,9 @@ begin
     v_reason := 'order_' || v_order.status;
   elsif v_booking.status <> 'pending_payment' then
     v_reason := 'booking_' || v_booking.status;
-  elsif v_booking.hold_expires_at is null or v_booking.hold_expires_at <= now() then
+  elsif v_booking.hold_expires_at is null or v_booking.hold_expires_at <= clock_timestamp() then
     v_reason := 'hold_expired';
-  elsif now() >= v_order.expires_at then
+  elsif clock_timestamp() >= v_order.expires_at then
     v_reason := 'order_expired';
   elsif p_transfer_at < v_order.created_at
      or p_transfer_at > least(v_order.expires_at, v_booking.hold_expires_at) then
@@ -369,6 +375,7 @@ declare
   v_order_count int;
   v_claim_count int;
   v_slot public.booking_slots;
+  v_others int;
   v_image_path text;
 begin
   select count(*) into v_order_count from public.payment_orders
@@ -411,6 +418,27 @@ begin
   select * into v_booking from public.bookings where id = p_booking_id for update;
   if not found then raise exception 'booking_not_found'; end if;
   if v_booking.status <> 'pending_payment' then raise exception 'booking_not_pending_payment'; end if;
+  if v_booking.hold_expires_at is null
+     or v_booking.hold_expires_at <= clock_timestamp()
+  then
+    raise exception 'hold_expired';
+  end if;
+  if v_booking.slot_id is null then raise exception 'not_slot_booking'; end if;
+
+  -- Lock the slot after the booking, then count every other current occupant
+  -- while the slot lock prevents create_booking from inserting a competitor.
+  select * into v_slot from public.booking_slots
+   where id = v_booking.slot_id for update;
+  if not found or not v_slot.is_open then raise exception 'slot_closed'; end if;
+  select count(*) into v_others
+    from public.bookings
+   where slot_id = v_booking.slot_id
+     and id <> p_booking_id
+     and (
+       status in ('booked', 'confirmed', 'completed')
+       or (status = 'pending_payment' and hold_expires_at > clock_timestamp())
+     );
+  if v_others >= v_slot.capacity then raise exception 'slot_full'; end if;
 
   update public.payment_transactions set resolution = 'confirmed',
     resolution_reason = 'manual_approved', resolved_at = now()
@@ -439,7 +467,6 @@ begin
   -- rationale). now() rather than v_booking.updated_at: v_booking was
   -- fetched before the status update above, so its own updated_at is stale;
   -- now() is transactionally consistent with the UPDATE just committed above.
-  select * into v_slot from public.booking_slots where id = v_booking.slot_id;
   select bi.storage_path into v_image_path
     from public.booking_images bi
    where bi.booking_id = p_booking_id
@@ -495,6 +522,10 @@ grant execute on function public.approve_manual_review_payment(uuid) to service_
 alter table public.notification_deliveries add column if not exists image_retry_key uuid default gen_random_uuid();
 update public.notification_deliveries set image_retry_key = gen_random_uuid() where image_retry_key is null;
 alter table public.notification_deliveries alter column image_retry_key set not null;
+create unique index if not exists notification_deliveries_line_retry_key_uniq
+  on public.notification_deliveries(line_retry_key);
+create unique index if not exists notification_deliveries_image_retry_key_uniq
+  on public.notification_deliveries(image_retry_key);
 
 -- ===========================================================================
 -- 5. claim_team_notification_deliveries — replaces the version from

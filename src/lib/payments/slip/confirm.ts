@@ -59,6 +59,7 @@ export async function confirmSlipPayment(opts: {
 /** Pre-RPC rejection outcomes the server decides (provider/policy failures). */
 export type SlipRejectionOutcome =
   | "provider_unverified"
+  | "duplicate_tx"
   | "tx_ref_missing"
   | "timestamp_out_of_window"
   | "receiver_mismatch"

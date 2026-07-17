@@ -179,9 +179,64 @@ try {
   const expiredOrder = await order(await booking(), "expired-order");
   await db.query("update public.payment_orders set expires_at=now()-interval '1 second' where id=$1", [expiredOrder]);
   assert.equal((await confirmWith(db, expiredOrder, "REF expired-order")).result, "manual_review");
-  const expiredHold = await order(await booking(), "expired-hold");
+  const expiredHoldBooking = await booking();
+  const expiredHold = await order(expiredHoldBooking, "expired-hold");
   await db.query("update public.bookings set hold_expires_at=now()-interval '1 second' where id=(select booking_id from public.payment_orders where id=$1)", [expiredHold]);
   assert.equal((await confirmWith(db, expiredHold, "REF expired-hold")).result, "manual_review");
+  await assert.rejects(
+    () => db.query("select public.approve_manual_review_payment($1) result", [expiredHoldBooking]),
+    /hold_expired/,
+    "an expired manual-review hold must never be approved",
+  );
+  assert.equal((await db.query("select status from public.bookings where id=$1", [expiredHoldBooking])).rows[0].status, "pending_payment");
+  assert.equal((await db.query(
+    "select count(*)::int n from public.notification_deliveries where booking_id=$1 and event_type='booking_confirmed'",
+    [expiredHoldBooking],
+  )).rows[0].n, 0);
+
+  // Approval that starts while the hold is live but waits behind the booking
+  // lock must re-read wall-clock expiry after acquiring that lock.
+  const expiryRaceBooking = await booking();
+  const expiryRaceOrder = await order(expiryRaceBooking, "expiry-race");
+  assert.equal((await confirmWith(db, expiryRaceOrder, "REF expiry-race", { profile: null })).result, "manual_review");
+  await db.query("update public.bookings set hold_expires_at=clock_timestamp()+interval '600 milliseconds' where id=$1", [expiryRaceBooking]);
+  const expiryBlocker = await client();
+  const expiryApprover = await client();
+  await expiryBlocker.query("begin");
+  await expiryBlocker.query("select id from public.bookings where id=$1 for update", [expiryRaceBooking]);
+  const approvalOutcome = expiryApprover
+    .query("select public.approve_manual_review_payment($1) result", [expiryRaceBooking])
+    .then((result) => ({ result, error: null as unknown }), (error: unknown) => ({ result: null, error }));
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  await expiryBlocker.query("commit");
+  const raced = await approvalOutcome;
+  assert.match(String((raced.error as Error | null)?.message ?? ""), /hold_expired/);
+  assert.equal(raced.result, null);
+  assert.equal((await db.query("select status from public.bookings where id=$1", [expiryRaceBooking])).rows[0].status, "pending_payment");
+
+  // Even a still-live hold cannot be approved if every slot seat is already
+  // occupied by another booking. The slot lock makes this check atomic with
+  // create_booking and other transitions.
+  const fullSlotBooking = await booking();
+  const fullSlotOrder = await order(fullSlotBooking, "manual-full-slot");
+  assert.equal((await confirmWith(db, fullSlotOrder, "REF manual-full-slot", { profile: null })).result, "manual_review");
+  const fullSlotId = (await db.query("select slot_id from public.bookings where id=$1", [fullSlotBooking])).rows[0].slot_id as string;
+  await db.query("update public.booking_slots set capacity=1 where id=$1", [fullSlotId]);
+  const occupant = (await db.query(`insert into public.bookings(
+      slot_id,source,nickname,phone,consultation_topic,birth_date_text,
+      preferred_time,status,queue_number,hold_expires_at
+    ) values ($1,'website','slot-occupant','0800000009','integration','2000-01-01',
+      'PG integration','confirmed',2,null) returning id`, [fullSlotId])).rows[0].id as string;
+  ids.bookings.push(occupant);
+  await assert.rejects(
+    () => db.query("select public.approve_manual_review_payment($1) result", [fullSlotBooking]),
+    /slot_full/,
+  );
+  assert.equal((await db.query("select status from public.bookings where id=$1", [fullSlotBooking])).rows[0].status, "pending_payment");
+  assert.equal((await db.query(
+    "select count(*)::int n from public.notification_deliveries where booking_id=$1 and event_type='booking_confirmed'",
+    [fullSlotBooking],
+  )).rows[0].n, 0);
 
   // service_role itself cannot mutate immutable payment-order trust fields.
   const immutableBooking = await booking();

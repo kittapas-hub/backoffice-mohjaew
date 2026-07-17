@@ -239,16 +239,16 @@ trust_field_trigger_check as (
 -- ---------------------------------------------------------------------------
 -- Functions: existence + privileges
 -- ---------------------------------------------------------------------------
-required_0011_functions(signature) as (
+required_0011_functions(signature, expect_service_execute) as (
   values
-    ('public.reject_payment_order_trust_field_change()'::text),
-    ('public.create_slip_payment_order(uuid,text,integer,text)'::text),
-    ('public.confirm_slip_payment(uuid,text,text,timestamptz,integer,text,text,jsonb)'::text),
-    ('public.approve_manual_review_payment(uuid)'::text),
-    ('public.claim_team_notification_deliveries(text,integer,text[])'::text)
+    ('public.reject_payment_order_trust_field_change()'::text, false),
+    ('public.create_slip_payment_order(uuid,text,integer,text)'::text, true),
+    ('public.confirm_slip_payment(uuid,text,text,timestamptz,integer,text,text,jsonb)'::text, true),
+    ('public.approve_manual_review_payment(uuid)'::text, true),
+    ('public.claim_team_notification_deliveries(text,integer,text[])'::text, true)
 ),
 function_privileges_0011 as (
-  select signature, to_regprocedure(signature) as function_oid
+  select signature, expect_service_execute, to_regprocedure(signature) as function_oid
   from required_0011_functions
 ),
 function_baseline_0011 as (
@@ -262,7 +262,7 @@ function_baseline_0011 as (
     )) as authenticated_denied,
     bool_and(coalesce(
       has_function_privilege(to_regrole('service_role'), function_oid, 'execute'), false
-    )) as service_role_allowed
+    ) = expect_service_execute) as service_role_allowed
   from function_privileges_0011
 ),
 functions_0011_evidence as (

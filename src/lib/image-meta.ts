@@ -89,7 +89,10 @@ export function sniffImage(buf: Buffer): ImageMeta | null {
   return pngMeta(buf) ?? jpegMeta(buf) ?? webpMeta(buf) ?? null;
 }
 
-export const SLIP_MAX_BYTES = 5 * 1024 * 1024;
+// Keep the file below Vercel Functions' documented 4.5 MB whole-request
+// ceiling, leaving room for multipart headers and boundaries. The route also
+// enforces a separate whole-request limit before parsing form data.
+export const SLIP_MAX_BYTES = 4 * 1024 * 1024;
 export const SLIP_MIN_DIMENSION = 100;
 export const SLIP_MAX_DIMENSION = 8000;
 

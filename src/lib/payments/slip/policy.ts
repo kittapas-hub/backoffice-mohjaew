@@ -8,7 +8,8 @@
 import type { NormalizedSlipVerification } from "./types.ts";
 
 export type SlipPolicyRejection =
-  | "tx_ref_missing";
+  | "tx_ref_missing"
+  | "duplicate_tx";
 
 export type SlipPolicyDecision =
   | { ok: true }
@@ -83,6 +84,11 @@ export function evaluateSlipPolicy(
   void _opts;
   const txRef = slip.providerTransactionReference?.trim() ?? "";
   if (!txRef) return { ok: false, code: "tx_ref_missing" };
+  // EasySlip is called with checkDuplicate=true. Any value other than the
+  // explicit fresh-slip signal must fail closed before the confirmation RPC.
+  if (slip.duplicateSignal !== false) {
+    return { ok: false, code: "duplicate_tx" };
+  }
 
   return { ok: true };
 }
