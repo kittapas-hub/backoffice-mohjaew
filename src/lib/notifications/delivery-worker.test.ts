@@ -16,6 +16,7 @@ import {
   runDeliveryWorker,
   renderPaymentReceivedMessage,
   renderBookingConfirmedMessage,
+  renderSlipManualReviewMessage,
   EVENT_TYPES,
   type ClaimedRow,
 } from "./delivery-worker.ts";
@@ -150,7 +151,11 @@ function makeRow(id: string): ClaimedRow {
 
 // makeConfirmedRow: mirrors the exact payload shape written by
 // 0012_booking_confirmed_notification.sql — no invented fields.
-function makeConfirmedRow(id: string, opts: { imagePath?: string | null } = {}): ClaimedRow {
+function makeConfirmedRow(
+  id: string,
+  opts: { imagePath?: string | null; confirmationMethod?: string; amounts?: boolean } = {},
+): ClaimedRow {
+  const { confirmationMethod = "easyslip_auto", amounts = true } = opts;
   return {
     id,
     booking_id: `booking-${id}`,
@@ -167,7 +172,8 @@ function makeConfirmedRow(id: string, opts: { imagePath?: string | null } = {}):
       booking_date: "2026-07-20",
       session_time: "09:00–12:00 (เช้า)",
       queue_number: 3,
-      confirmation_method: "easyslip_auto",
+      confirmation_method: confirmationMethod,
+      ...(amounts ? { expected_amount_satang: 99900, received_amount_satang: 99900 } : {}),
       updated_at: "2026-07-14T10:00:00Z",
       image_storage_path: "imagePath" in opts ? opts.imagePath : `booking-${id}/face.jpg`,
     },
@@ -187,8 +193,13 @@ assert.notEqual(
   "line_retry_key and image_retry_key must be distinct values",
 );
 
+// ===========================================================================
+// Wording must depend on the confirmation path. EasySlip automatic success
+// claims both payment received AND booking confirmed — this is the sole
+// team notification for that path (no separate payment_received message).
+// ===========================================================================
 {
-  const text = renderBookingConfirmedMessage(makeConfirmedRow("xyz"));
+  const text = renderBookingConfirmedMessage(makeConfirmedRow("xyz", { confirmationMethod: "easyslip_auto" }));
   assert.match(text, /ABCD1234/);
   assert.match(text, /สมชาย/);
   assert.match(text, /1990-01-01/);
@@ -199,17 +210,110 @@ assert.notEqual(
   assert.match(text, /3/);
   assert.match(text, /easyslip_auto/);
   assert.match(text, /2026-07-14T10:00:00Z/);
+  assert.equal(text.split("\n")[0], "ได้รับชำระเงินและยืนยันการจองแล้ว");
+  assert.match(text, /ยอดที่ต้องชำระ: 999 บาท/);
+  assert.match(text, /ยอดที่ได้รับ: 999 บาท/);
+}
+
+// Provider-verified manual-review approval: distinct wording, still shows
+// both amounts (the payment order backs this confirmation too).
+{
+  const text = renderBookingConfirmedMessage(
+    makeConfirmedRow("manual", { confirmationMethod: "manual_review_approved" }),
+  );
+  assert.equal(text.split("\n")[0], "ตรวจสอบการชำระเงินและยืนยันการจองแล้ว");
+  assert.match(text, /ยอดที่ต้องชำระ: 999 บาท/);
+  assert.match(text, /ยอดที่ได้รับ: 999 บาท/);
+}
+
+// Admin override without verified payment: must never claim a payment was
+// received, and — since there is no payment order — never show an amount.
+{
+  const text = renderBookingConfirmedMessage(
+    makeConfirmedRow("override", { confirmationMethod: "admin_override", amounts: false }),
+  );
+  assert.equal(text.split("\n")[0], "ทีมงานยืนยันการจองแล้ว");
+  assert.doesNotMatch(text, /ได้รับชำระเงิน/, "admin override must never claim payment was received");
+  assert.doesNotMatch(text, /ยอดที่ต้องชำระ|ยอดที่ได้รับ/, "admin override has no payment order and must never show an amount");
+}
+
+// An unrecognized/absent confirmation_method falls back to the generic
+// headline rather than throwing or showing "undefined".
+{
+  const row = makeConfirmedRow("unknown", { amounts: false });
+  row.payload = { ...row.payload, confirmation_method: "something_else" };
+  const text = renderBookingConfirmedMessage(row);
   assert.equal(text.split("\n")[0], "ยืนยันการจองคิวแล้ว");
 }
 
 // renderBookingConfirmedMessage must fall back to "-" for absent fields
-// rather than throwing or printing "undefined".
+// rather than throwing or printing "undefined", and must omit amount/
+// Backoffice lines entirely when those fields are absent.
 {
   const row = makeConfirmedRow("missing", { imagePath: null });
   row.payload = { booking_id: row.booking_id };
   const text = renderBookingConfirmedMessage(row);
   assert.doesNotMatch(text, /undefined/);
   assert.match(text, /เลขอ้างอิง: -/);
+  assert.doesNotMatch(text, /ยอดที่ต้องชำระ|ยอดที่ได้รับ|Backoffice/);
+}
+
+// ===========================================================================
+// Backoffice URL: included only when an appUrl is supplied, built from the
+// trusted booking_id in the payload — never a relative/broken link.
+// ===========================================================================
+{
+  const withUrl = renderBookingConfirmedMessage(makeConfirmedRow("link"), "https://backoffice.example.com/");
+  assert.match(withUrl, /Backoffice: https:\/\/backoffice\.example\.com\/admin\/bookings\/booking-link/);
+
+  const withoutUrl = renderBookingConfirmedMessage(makeConfirmedRow("nolink"));
+  assert.doesNotMatch(withoutUrl, /Backoffice:/);
+}
+
+// ===========================================================================
+// renderSlipManualReviewMessage: reference code, both amounts, fixed reason
+// code, and the Backoffice link when configured — never the raw provider
+// payload or an unredacted transaction reference (those are simply never
+// present in the payload to begin with).
+// ===========================================================================
+function makeManualReviewRow(id: string): ClaimedRow {
+  return {
+    id,
+    booking_id: `booking-${id}`,
+    payment_order_id: `order-${id}`,
+    channel: "line",
+    event_type: "slip_manual_review",
+    payload: {
+      booking_id: `booking-${id}`,
+      payment_order_id: `order-${id}`,
+      reference_code: "ABCD1234",
+      reason: "amount_mismatch",
+      expected_amount_satang: 99900,
+      received_amount_satang: 100,
+    },
+    idempotency_key: `slip:review:${id}`,
+    attempt_count: 0,
+    line_retry_key: "44444444-4444-4444-8444-444444444444",
+    image_retry_key: "55555555-5555-4555-8555-555555555555",
+  };
+}
+
+{
+  const text = renderSlipManualReviewMessage(makeManualReviewRow("mismatch"), "https://backoffice.example.com");
+  assert.match(text, /ABCD1234/);
+  assert.match(text, /เหตุผล: amount_mismatch/);
+  // The canonical 1 THB-against-999-THB mismatch scenario: both figures
+  // must be visible, distinctly, in the alert.
+  assert.match(text, /ยอดที่ต้องชำระ: 999 บาท/);
+  assert.match(text, /ยอดที่ได้รับ: 1 บาท/);
+  assert.match(text, /Backoffice: https:\/\/backoffice\.example\.com\/admin\/bookings\/booking-mismatch/);
+  assert.doesNotMatch(text, /provider_payload|providerPayload/i);
+}
+
+{
+  // No appUrl configured => no Backoffice line, never a broken relative link.
+  const text = renderSlipManualReviewMessage(makeManualReviewRow("nourl"));
+  assert.doesNotMatch(text, /Backoffice:/);
 }
 
 // --- console.error capture helper for privacy assertions --------------------
@@ -552,7 +656,7 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
     sendPush: async (to, text, retryKey) => {
       pushedTo.push(to);
       pushedRetryKeys.push(retryKey);
-      assert.match(text, /ยืนยันการจองคิวแล้ว/);
+      assert.match(text, /ได้รับชำระเงินและยืนยันการจองแล้ว/);
       return { ok: true };
     },
     signFaceUrl: async (path) => {

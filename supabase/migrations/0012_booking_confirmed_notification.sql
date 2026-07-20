@@ -13,6 +13,23 @@
 -- The manual-review path now rechecks the live hold and slot capacity under
 -- row locks, and automatic confirmation uses wall-clock expiry checks after
 -- its locks are acquired. Do not substitute the earlier candidate blob.
+--
+-- Release-audit hardening note (2026-07-20): still not applied to Production,
+-- corrected in place again. confirm_slip_payment's and
+-- approve_manual_review_payment's success branches previously enqueued BOTH
+-- 'payment_received' and 'booking_confirmed' team rows for the same event —
+-- the team got two LINE messages for one confirmed+paid booking. Both
+-- functions now enqueue booking_confirmed only; it is the sole canonical
+-- successful-confirmation event for every payment-verified path (the
+-- 'payment_received' event type itself is untouched and still used by the
+-- unrelated webhook-provider flow in 0005_payment_foundation.sql). The
+-- booking_confirmed payload gains 'expected_amount_satang' and
+-- 'received_amount_satang' (present when a payment order backs the
+-- confirmation; absent for the admin-override path, which never claims a
+-- payment was received). The slip_manual_review payload gains
+-- 'reference_code', 'expected_amount_satang', and 'received_amount_satang' so
+-- an amount-mismatch alert shows both figures without exposing the full
+-- provider payload or an unredacted transaction reference.
 -- Forward-only: this migration does not edit 0010_reconcile_0006_0009.sql or
 -- 0011_slip_verification.sql. It only issues `create or replace function`
 -- (and, for the two functions whose signature changes, `drop function` +
@@ -50,6 +67,11 @@
 -- each function. Actual LINE delivery happens later, out of this
 -- transaction, in the delivery worker — a LINE outage can never fail or
 -- roll back a booking confirmation.
+--
+-- One event per confirmation, not two: confirm_slip_payment and
+-- approve_manual_review_payment each enqueue exactly one booking_confirmed
+-- row on success and no longer also enqueue payment_received — see the
+-- 2026-07-20 hardening note above.
 --
 -- Every insert below hardcodes the team recipient type, matching every
 -- existing insert in this table — customer delivery is never introduced.
@@ -293,7 +315,11 @@ begin
     ) values (v_order.booking_id, p_payment_order_id, 'line', 'team',
       'slip_manual_review', 'slip:review:' || v_transaction.id::text,
       jsonb_build_object('booking_id',v_order.booking_id,
-                         'payment_order_id',p_payment_order_id,'reason',v_reason))
+                         'payment_order_id',p_payment_order_id,
+                         'reference_code',upper(left(v_order.booking_id::text,8)),
+                         'reason',v_reason,
+                         'expected_amount_satang',v_order.amount_satang,
+                         'received_amount_satang',p_amount_satang))
       on conflict (idempotency_key) do nothing;
     return jsonb_build_object('result','manual_review','reason',v_reason);
   end if;
@@ -310,19 +336,13 @@ begin
     amount_satang, outcome, evidence
   ) values (p_payment_order_id, v_order.booking_id, p_provider, v_tx_ref,
     p_transfer_at, p_amount_satang, 'confirmed', p_evidence);
-  -- Phase 1 has no verified customer LINE identity: team-only outbox intent.
-  insert into public.notification_deliveries(
-    booking_id, payment_order_id, channel, recipient_type, event_type,
-    idempotency_key, payload
-  ) values (v_order.booking_id, p_payment_order_id, 'line', 'team',
-    'payment_received', 'pay:received:team:' || p_payment_order_id::text,
-    jsonb_build_object('booking_id',v_order.booking_id,'payment_order_id',p_payment_order_id))
-    on conflict (idempotency_key) do nothing;
 
-  -- Booking-summary team notification (see migration header for dedup/race
-  -- rationale). now() rather than v_booking.updated_at: v_booking was
-  -- fetched before the status update above, so its own updated_at is stale;
-  -- now() is transactionally consistent with the UPDATE just committed above.
+  -- Single canonical successful-confirmation notification (see migration
+  -- header for the 2026-07-20 dedup rationale): booking_confirmed only — no
+  -- separate payment_received row for this payment-verified path.
+  -- now() rather than v_booking.updated_at: v_booking was fetched before the
+  -- status update above, so its own updated_at is stale; now() is
+  -- transactionally consistent with the UPDATE just committed above.
   select * into v_slot from public.booking_slots where id = v_booking.slot_id;
   select bi.storage_path into v_image_path
     from public.booking_images bi
@@ -346,6 +366,8 @@ begin
       'session_time', v_slot.label,
       'queue_number', v_booking.queue_number,
       'confirmation_method', 'easyslip_auto',
+      'expected_amount_satang', v_order.amount_satang,
+      'received_amount_satang', p_amount_satang,
       'updated_at', now(),
       'image_storage_path', v_image_path
     )
@@ -455,18 +477,13 @@ begin
     v_transaction.normalized_tx_ref, v_transaction.transfer_at,
     v_transaction.amount_satang, 'confirmed',
     jsonb_build_object('resolution','manual_approved'));
-  insert into public.notification_deliveries(
-    booking_id, payment_order_id, channel, recipient_type, event_type,
-    idempotency_key, payload
-  ) values (p_booking_id, v_order.id, 'line', 'team', 'payment_received',
-    'pay:received:team:' || v_order.id::text,
-    jsonb_build_object('booking_id',p_booking_id,'payment_order_id',v_order.id))
-  on conflict (idempotency_key) do nothing;
 
-  -- Booking-summary team notification (see migration header for dedup/race
-  -- rationale). now() rather than v_booking.updated_at: v_booking was
-  -- fetched before the status update above, so its own updated_at is stale;
-  -- now() is transactionally consistent with the UPDATE just committed above.
+  -- Single canonical successful-confirmation notification (see migration
+  -- header for the 2026-07-20 dedup rationale): booking_confirmed only — no
+  -- separate payment_received row for this payment-verified path.
+  -- now() rather than v_booking.updated_at: v_booking was fetched before the
+  -- status update above, so its own updated_at is stale; now() is
+  -- transactionally consistent with the UPDATE just committed above.
   select bi.storage_path into v_image_path
     from public.booking_images bi
    where bi.booking_id = p_booking_id
@@ -489,6 +506,8 @@ begin
       'session_time', v_slot.label,
       'queue_number', v_booking.queue_number,
       'confirmation_method', 'manual_review_approved',
+      'expected_amount_satang', v_order.amount_satang,
+      'received_amount_satang', v_transaction.amount_satang,
       'updated_at', now(),
       'image_storage_path', v_image_path
     )

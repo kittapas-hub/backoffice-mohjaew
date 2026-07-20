@@ -49,17 +49,30 @@ export function renderPaymentReceivedMessage(row: ClaimedRow): string {
 }
 
 // Renders strictly from the fields confirm_slip_payment writes for a team
-// slip_manual_review row (booking_id, payment_order_id, reason) — see
-// 0011_slip_verification.sql. The reason is one of the fixed codes the
-// migration emits (booking_<status> / hold_expired), never free text.
-export function renderSlipManualReviewMessage(row: ClaimedRow): string {
-  const reason = typeof row.payload?.reason === "string" ? row.payload.reason : "-";
-  return [
+// slip_manual_review row (booking_id, payment_order_id, reference_code,
+// reason, expected_amount_satang, received_amount_satang) — see
+// 0011_slip_verification.sql / 0012_booking_confirmed_notification.sql. The
+// reason is one of the fixed codes the migration emits (booking_<status> /
+// hold_expired / amount_mismatch / ...), never free text. Never includes the
+// full provider payload or an unredacted transaction reference — those are
+// never written to this payload in the first place.
+export function renderSlipManualReviewMessage(row: ClaimedRow, appUrl?: string): string {
+  const payload = row.payload;
+  const reason = typeof payload?.reason === "string" ? payload.reason : "-";
+  const lines = [
     "แจ้งเตือน: สลิปที่ยืนยันแล้วต้องการการตรวจสอบโดยทีมงาน",
     `Booking: ${row.booking_id}`,
+    `เลขอ้างอิง: ${field(payload, "reference_code")}`,
     `Payment order: ${row.payment_order_id ?? "-"}`,
     `เหตุผล: ${reason}`,
-  ].join("\n");
+  ];
+  const expected = moneyField(payload, "expected_amount_satang");
+  const received = moneyField(payload, "received_amount_satang");
+  if (expected) lines.push(`ยอดที่ต้องชำระ: ${expected}`);
+  if (received) lines.push(`ยอดที่ได้รับ: ${received}`);
+  const url = backofficeUrl(payload, appUrl);
+  if (url) lines.push(`Backoffice: ${url}`);
+  return lines.join("\n");
 }
 
 function field(payload: Record<string, unknown> | null, key: string): string {
@@ -67,14 +80,46 @@ function field(payload: Record<string, unknown> | null, key: string): string {
   return typeof v === "string" || typeof v === "number" ? String(v) : "-";
 }
 
+// Formats a satang integer payload field as a THB display string, or null
+// when the field is absent/not a finite number (e.g. the admin-override path,
+// which has no payment order and therefore no amount to show).
+function moneyField(payload: Record<string, unknown> | null, key: string): string | null {
+  const v = payload?.[key];
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  return `${(v / 100).toLocaleString("th-TH")} บาท`;
+}
+
+// Absolute admin booking-detail link, or null when either the app URL isn't
+// configured or the payload has no booking_id — "include the Backoffice URL
+// when configured" is best-effort, never a broken/relative link in a LINE
+// message.
+function backofficeUrl(payload: Record<string, unknown> | null, appUrl: string | undefined): string | null {
+  if (!appUrl) return null;
+  const bookingId = payload?.booking_id;
+  if (typeof bookingId !== "string" || bookingId.length === 0) return null;
+  return `${appUrl.replace(/\/+$/, "")}/admin/bookings/${bookingId}`;
+}
+
+// Combined wording depends on how payment was established for this
+// confirmation — never claim a payment was received on the admin-override
+// path, which has no verified payment at all.
+const CONFIRMED_HEADLINE: Record<string, string> = {
+  easyslip_auto: "ได้รับชำระเงินและยืนยันการจองแล้ว",
+  manual_review_approved: "ตรวจสอบการชำระเงินและยืนยันการจองแล้ว",
+  admin_override: "ทีมงานยืนยันการจองแล้ว",
+};
+
 // Renders strictly from the fields the transition_slot_booking /
 // confirm_slip_payment / approve_manual_review_payment 'confirmed' paths
 // actually write (0012_booking_confirmed_notification.sql) — no invented
-// fields.
-export function renderBookingConfirmedMessage(row: ClaimedRow): string {
+// fields. This is the sole team notification for a successful confirmation:
+// the payment-verified paths no longer also enqueue a separate
+// payment_received row (see the migration's 2026-07-20 hardening note).
+export function renderBookingConfirmedMessage(row: ClaimedRow, appUrl?: string): string {
   const p = row.payload;
-  return [
-    "ยืนยันการจองคิวแล้ว",
+  const method = field(p, "confirmation_method");
+  const lines = [
+    CONFIRMED_HEADLINE[method] ?? "ยืนยันการจองคิวแล้ว",
     `เลขอ้างอิง: ${field(p, "reference_code")}`,
     `ชื่อ: ${field(p, "customer_name")}`,
     `วันเกิด: ${field(p, "birth_date")}`,
@@ -83,17 +128,23 @@ export function renderBookingConfirmedMessage(row: ClaimedRow): string {
     `วันที่จอง: ${field(p, "booking_date")}`,
     `เวลา: ${field(p, "session_time")}`,
     `ลำดับคิว: ${field(p, "queue_number")}`,
-    `ยืนยันโดย: ${field(p, "confirmation_method")}`,
-    `อัปเดตล่าสุด: ${field(p, "updated_at")}`,
-  ].join("\n");
+  ];
+  const expected = moneyField(p, "expected_amount_satang");
+  const received = moneyField(p, "received_amount_satang");
+  if (expected) lines.push(`ยอดที่ต้องชำระ: ${expected}`);
+  if (received) lines.push(`ยอดที่ได้รับ: ${received}`);
+  lines.push(`ยืนยันโดย: ${method}`, `อัปเดตล่าสุด: ${field(p, "updated_at")}`);
+  const url = backofficeUrl(p, appUrl);
+  if (url) lines.push(`Backoffice: ${url}`);
+  return lines.join("\n");
 }
 
-export function renderMessage(row: ClaimedRow): string {
+export function renderMessage(row: ClaimedRow, appUrl?: string): string {
   if (row.event_type === "slip_manual_review") {
-    return renderSlipManualReviewMessage(row);
+    return renderSlipManualReviewMessage(row, appUrl);
   }
   if (row.event_type === "booking_confirmed") {
-    return renderBookingConfirmedMessage(row);
+    return renderBookingConfirmedMessage(row, appUrl);
   }
   return renderPaymentReceivedMessage(row);
 }
@@ -113,6 +164,11 @@ export type Deps = {
   // attempted — the text summary is unaffected either way.
   sendImage?: (to: string, imageUrl: string, retryKey: string) => Promise<PushResult>;
   signFaceUrl?: (storagePath: string) => Promise<string | null>;
+  // Optional: absolute app URL used to build the "Backoffice: ..." link in
+  // booking_confirmed/slip_manual_review messages. Omitted (or falsy) means
+  // that line is left out of the message entirely — never a broken relative
+  // link in a LINE message.
+  appUrl?: string;
   groupId: string;
   now: () => number;
   batch: number;
@@ -205,7 +261,7 @@ export async function runDeliveryWorker(deps: Deps): Promise<WorkerOutcome> {
 
     for (const row of rows) {
       result.processed++;
-      const text = renderMessage(row);
+      const text = renderMessage(row, deps.appUrl);
 
       let push: PushResult;
       try {

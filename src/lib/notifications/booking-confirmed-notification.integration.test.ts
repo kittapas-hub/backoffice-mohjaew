@@ -94,7 +94,23 @@ try {
     )).rows;
   }
 
-  function assertSummaryPayload(payload: Record<string, unknown>, bookingId: string, expectedMethod: string, expectedImagePath: string | null) {
+  // Requirement: EasySlip/manual-review-approval success must never also
+  // enqueue a separate payment_received team row for the same confirmation.
+  async function paymentReceivedNotifications(bookingId: string) {
+    return (await db.query(
+      `select id from public.notification_deliveries
+        where booking_id = $1 and event_type = 'payment_received'`,
+      [bookingId],
+    )).rows;
+  }
+
+  function assertSummaryPayload(
+    payload: Record<string, unknown>,
+    bookingId: string,
+    expectedMethod: string,
+    expectedImagePath: string | null,
+    expectedAmounts: { expected: number; received: number } | null = null,
+  ) {
     assert.equal(payload.booking_id, bookingId);
     assert.equal(payload.reference_code, bookingId.slice(0, 8).toUpperCase());
     assert.equal(payload.customer_name, "pg-notify-test");
@@ -107,6 +123,14 @@ try {
     assert.ok(payload.booking_date);
     assert.ok(payload.updated_at);
     assert.equal(payload.image_storage_path, expectedImagePath);
+    if (expectedAmounts) {
+      assert.equal(payload.expected_amount_satang, expectedAmounts.expected);
+      assert.equal(payload.received_amount_satang, expectedAmounts.received);
+    } else {
+      // Admin override has no payment order — must never fabricate an amount.
+      assert.equal(payload.expected_amount_satang, undefined);
+      assert.equal(payload.received_amount_satang, undefined);
+    }
   }
 
   // =========================================================================
@@ -164,7 +188,15 @@ try {
     assert.equal(approved.result, "ok");
     const rows = await confirmedNotifications(id);
     assert.equal(rows.length, 1, "manual review approval must enqueue exactly one booking_confirmed notification");
-    assertSummaryPayload(rows[0].payload, id, "manual_review_approved", `pg-integration/${id}.jpg`);
+    assertSummaryPayload(rows[0].payload, id, "manual_review_approved", `pg-integration/${id}.jpg`, {
+      expected: 99900,
+      received: 99900,
+    });
+    assert.equal(
+      (await paymentReceivedNotifications(id)).length,
+      0,
+      "manual review approval must not also enqueue a separate payment_received team notification",
+    );
 
     // Repeated approval attempt: the order is already 'paid', so this
     // returns 'already_paid' (a normal, non-throwing result — same pattern
@@ -188,7 +220,12 @@ try {
     assert.equal(result.result, "ok");
     const rows = await confirmedNotifications(id);
     assert.equal(rows.length, 1, "EasySlip automatic confirmation must enqueue exactly one booking_confirmed notification");
-    assertSummaryPayload(rows[0].payload, id, "easyslip_auto", null);
+    assertSummaryPayload(rows[0].payload, id, "easyslip_auto", null, { expected: 99900, received: 99900 });
+    assert.equal(
+      (await paymentReceivedNotifications(id)).length,
+      0,
+      "EasySlip automatic confirmation must not also enqueue a separate payment_received team notification",
+    );
 
     // Replaying the same confirmation call must not duplicate.
     const replay = (await db.query(
@@ -197,6 +234,47 @@ try {
     )).rows[0].result;
     assert.equal(replay.result, "already_paid");
     assert.equal((await confirmedNotifications(id)).length, 1);
+  }
+
+  // =========================================================================
+  // Path 4: amount mismatch (canonical scenario — a 1 THB transfer against a
+  // 999 THB order). EasySlip/provider verification succeeds (confirm_slip_payment
+  // runs to completion, no exception), but the order goes to manual_review,
+  // the booking is never confirmed, and the team alert must show BOTH the
+  // expected and the received amount distinctly.
+  // =========================================================================
+  {
+    const id = await booking({ withImage: false });
+    const orderId = await order(id, "mismatch");
+    const result = (await db.query(
+      `select public.confirm_slip_payment($1,'promptpay_slip','REF PG MISMATCH',now(),100,'THB','profile-test','{}'::jsonb) as result`,
+      [orderId],
+    )).rows[0].result;
+    assert.equal(result.result, "manual_review", "a 1 THB transfer against a 999 THB order must be routed to manual_review, not confirmed");
+    assert.equal(result.reason, "amount_mismatch");
+
+    assert.equal(
+      (await db.query("select status from public.bookings where id=$1", [id])).rows[0].status,
+      "pending_payment",
+      "the booking must remain unconfirmed after an amount mismatch",
+    );
+    assert.equal(
+      (await db.query("select status from public.payment_orders where id=$1", [orderId])).rows[0].status,
+      "manual_review",
+    );
+    assert.equal((await confirmedNotifications(id)).length, 0, "an amount mismatch must never enqueue a booking_confirmed notification");
+
+    const reviewRows = (await db.query(
+      `select payload from public.notification_deliveries where booking_id=$1 and event_type='slip_manual_review'`,
+      [id],
+    )).rows;
+    assert.equal(reviewRows.length, 1);
+    const payload = reviewRows[0].payload;
+    assert.equal(payload.reference_code, id.slice(0, 8).toUpperCase());
+    assert.equal(payload.reason, "amount_mismatch");
+    assert.equal(payload.expected_amount_satang, 99900);
+    assert.equal(payload.received_amount_satang, 100);
+    assert.equal(payload.provider_payload, undefined, "the alert must never carry the full provider payload");
   }
 
   // =========================================================================

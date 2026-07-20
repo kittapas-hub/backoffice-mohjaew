@@ -83,11 +83,14 @@ assert.equal(
 
 // ===========================================================================
 // Never recipient_type = 'customer'. Every insert in this migration
-// (including the untouched existing payment_received / slip_manual_review
-// ones reproduced verbatim) must target 'team' only.
+// (including the untouched existing slip_manual_review one) must target
+// 'team' only. Exactly 4: slip_manual_review (existing) + booking_confirmed
+// x3 (one per confirmation path) — payment_received is deliberately no
+// longer inserted by confirm_slip_payment/approve_manual_review_payment's
+// success branches (2026-07-20 dedup hardening).
 // ===========================================================================
 const teamInserts = (migration.match(/'line', 'team',/g) ?? []).length;
-assert.ok(teamInserts >= 5, `expected at least 5 team-channel inserts (2 existing + 3 new), found ${teamInserts}`);
+assert.equal(teamInserts, 4, `expected exactly 4 team-channel inserts (1 slip_manual_review + 3 booking_confirmed), found ${teamInserts}`);
 // Every notification_deliveries insert's (channel, recipient_type) pair is
 // ('line', 'team') — none is ('line', 'customer') or any other recipient.
 const insertBlocks = migration.split("insert into public.notification_deliveries").slice(1);
@@ -141,7 +144,30 @@ const confirmSlipManualReviewBranch = confirmSlipBody.slice(
 );
 assert.doesNotMatch(confirmSlipManualReviewBranch, /'booking_confirmed'/, "confirm_slip_payment's manual_review branch must never enqueue booking_confirmed");
 assert.match(confirmSlipBody, /'slip_manual_review'/, "confirm_slip_payment must preserve the existing slip_manual_review insert");
-assert.match(confirmSlipBody, /'payment_received'/, "confirm_slip_payment must preserve the existing payment_received insert");
+// One canonical successful notification, not two: the success path must no
+// longer also enqueue a separate payment_received team row now that
+// booking_confirmed carries the same information (2026-07-20 hardening).
+assert.doesNotMatch(confirmSlipBody, /'payment_received'/, "confirm_slip_payment must not enqueue a duplicate payment_received team row — booking_confirmed is the sole canonical successful event");
+// The manual_review alert must carry a booking reference and both the
+// expected and received amounts (e.g. a 1 THB transfer against a 999 THB
+// order must show both figures), without ever storing the full provider
+// payload or an unredacted transaction reference in the outbox payload.
+assert.match(confirmSlipManualReviewBranch, /'reference_code',upper\(left\(v_order\.booking_id::text,8\)\)/, "slip_manual_review payload must include a booking reference code");
+assert.match(confirmSlipManualReviewBranch, /'expected_amount_satang',v_order\.amount_satang/, "slip_manual_review payload must include the expected amount");
+assert.match(confirmSlipManualReviewBranch, /'received_amount_satang',p_amount_satang/, "slip_manual_review payload must include the received amount");
+// p_evidence (the raw provider payload) is legitimately stored in the
+// payment_slip_verifications audit ledger within this branch — it must
+// never additionally appear inside the notification_deliveries jsonb
+// payload that becomes the team's LINE message.
+const slipManualReviewNotificationPayload = confirmSlipManualReviewBranch.slice(
+  confirmSlipManualReviewBranch.indexOf("insert into public.notification_deliveries"),
+);
+assert.doesNotMatch(slipManualReviewNotificationPayload, /p_evidence/, "slip_manual_review notification payload must never carry the raw provider evidence/payload");
+assert.doesNotMatch(slipManualReviewNotificationPayload, /provider_tx_ref|v_tx_ref/, "slip_manual_review notification payload must never carry an unredacted transaction reference");
+// The success path's booking_confirmed payload must also carry both amounts.
+const confirmSlipSuccessBranch = confirmSlipBody.slice(confirmSlipBody.indexOf("if v_reason is not null then"));
+assert.match(confirmSlipSuccessBranch, /'expected_amount_satang', v_order\.amount_satang/, "confirm_slip_payment's booking_confirmed payload must include the expected amount");
+assert.match(confirmSlipSuccessBranch, /'received_amount_satang', p_amount_satang/, "confirm_slip_payment's booking_confirmed payload must include the received amount");
 // Ledger + trust invariants preserved verbatim.
 assert.match(confirmSlipBody, /insert into public\.payment_transactions/, "confirm_slip_payment must preserve the payment_transactions ledger claim");
 assert.match(confirmSlipBody, /insert into public\.payment_slip_verifications/, "confirm_slip_payment must preserve the payment_slip_verifications audit");
@@ -150,9 +176,17 @@ assert.match(confirmSlipBody, /duplicate_tx/, "confirm_slip_payment must preserv
 // approve_manual_review_payment: booking_confirmed enqueue present, after
 // the manual_review claim is validated and resolved.
 assert.match(approveBody, /'confirmation_method', 'manual_review_approved'/, "approve_manual_review_payment must label confirmation_method manual_review_approved");
-assert.match(approveBody, /'payment_received'/, "approve_manual_review_payment must preserve the existing payment_received insert");
+// Same dedup fix as confirm_slip_payment: no separate payment_received row.
+assert.doesNotMatch(approveBody, /'payment_received'/, "approve_manual_review_payment must not enqueue a duplicate payment_received team row — booking_confirmed is the sole canonical successful event");
+assert.match(approveBody, /'expected_amount_satang', v_order\.amount_satang/, "approve_manual_review_payment's booking_confirmed payload must include the expected amount");
+assert.match(approveBody, /'received_amount_satang', v_transaction\.amount_satang/, "approve_manual_review_payment's booking_confirmed payload must include the received amount");
 assert.match(approveBody, /manual_review_claim_ambiguous/, "approve_manual_review_payment must preserve the ambiguous-claim guard");
 assert.match(approveBody, /manual_review_claim_not_found/, "approve_manual_review_payment must preserve the not-found guard");
+
+// transition_slot_booking (admin override) has no payment order at all, so
+// it must never claim/show an amount — the wording variant enforces this at
+// render time, but the payload itself must never fabricate a figure either.
+assert.doesNotMatch(transitionBody, /expected_amount_satang|received_amount_satang/, "transition_slot_booking must never include amount fields — it has no verified payment");
 
 // ===========================================================================
 // Image reference is a storage path — never a signed URL (signing happens

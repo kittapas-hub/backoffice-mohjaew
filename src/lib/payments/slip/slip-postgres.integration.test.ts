@@ -1,5 +1,9 @@
 // Real PostgreSQL integration suite. It never migrates a database: provision a
 // disposable database with 0001-0011 already applied and set PG_INTEGRATION_URL.
+// The atomicity probe near the end of this file targets the current
+// confirm_slip_payment body's outbox insert (booking_confirmed as of
+// 0012_booking_confirmed_notification.sql, if that migration is also
+// applied) — see that probe's own comment.
 import assert from "node:assert";
 import { Client } from "pg";
 
@@ -256,8 +260,11 @@ try {
   }
   await service.query("reset role");
 
+  // confirm_slip_payment's success path enqueues booking_confirmed only (no
+  // separate payment_received row — see 0012's 2026-07-20 dedup hardening),
+  // so the forced-failure atomicity probe below targets that event type.
   const rollbackOrder = await order(await booking(), "rollback");
-  await db.query("alter table public.notification_deliveries add constraint mohjaew_test_force_outbox_failure check (event_type <> 'payment_received') not valid");
+  await db.query("alter table public.notification_deliveries add constraint mohjaew_test_force_outbox_failure check (event_type <> 'booking_confirmed') not valid");
   await assert.rejects(() => confirmWith(db, rollbackOrder, "REF rollback"));
   await db.query("alter table public.notification_deliveries drop constraint mohjaew_test_force_outbox_failure");
   assert.equal((await db.query(

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { pushMessage, pushImageMessage, validateLineGroupId } from "@/lib/line";
 import { runDeliveryWorker, DEFAULT_BATCH, TIME_BUDGET_MS } from "@/lib/notifications/delivery-worker";
+import { APP_URL } from "@/lib/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,6 +67,7 @@ export async function GET(req: Request) {
     sendPush: pushMessage,
     sendImage: pushImageMessage,
     signFaceUrl,
+    appUrl: APP_URL || undefined,
     groupId,
     now: () => Date.now(),
     batch: DEFAULT_BATCH,
