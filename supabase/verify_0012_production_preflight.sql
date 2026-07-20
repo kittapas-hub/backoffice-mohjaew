@@ -508,16 +508,26 @@ gen_random_uuid_summary as (
     and p.prosrc is not null
     and n.nspname in ('pg_catalog', 'public', 'extensions')
 ),
+-- source_provenance is a static marker, not a live check: Postgres has no
+-- access to git, so it cannot itself verify these two literals against the
+-- repository. It always PASSes here by construction (the values() row is
+-- compared to itself) — the actual verification is external, enforced by
+-- supabase/verify_0012_production_preflight.test.ts, which independently
+-- recomputes both values via git (git hash-object on this migration file,
+-- and git log -1 for its most recent touching commit) and fails the test
+-- suite if either hardcoded literal below has gone stale. Whenever
+-- supabase/migrations/0012_booking_confirmed_notification.sql changes,
+-- update BOTH literals below to match, or that test will fail.
 provenance as (
   select
     'source_provenance'::text as check_name,
-    case when source_commit = '6b868508e4c61c1a5cfa37297ed4f9a369fc6732'
-              and migration_blob = '66001e73bf7db093802f495631b3ee1b4f9f1eb6'
+    case when source_commit = 'b469e4715c0da6fdcb4603903c54466bddaadef5'
+              and migration_blob = '479553f3d8abe91d48add63249370d5939051188'
          then 'PASS' else 'FAIL' end::text as status,
     ('reviewed_commit=' || source_commit || '; migration_blob=' || migration_blob)::text as evidence
   from (values (
-    '6b868508e4c61c1a5cfa37297ed4f9a369fc6732'::text,
-    '66001e73bf7db093802f495631b3ee1b4f9f1eb6'::text
+    'b469e4715c0da6fdcb4603903c54466bddaadef5'::text,
+    '479553f3d8abe91d48add63249370d5939051188'::text
   )) v(source_commit, migration_blob)
 ),
 checks as (

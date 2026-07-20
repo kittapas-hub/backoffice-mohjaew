@@ -7,15 +7,25 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// This file's own path, relative to repoRoot, in the exact form git expects
+// after a `cwd: repoRoot` exec. It must reference the retired name in prose
+// (comments/assert messages) to describe what it tests for — excluded below
+// so that self-reference can never be miscounted as a leftover occurrence.
+const SELF_PATH = "src/lib/env.test.ts";
 
 // ===========================================================================
-// Repository-wide: zero tracked-file occurrences of the retired env var name.
-// No fallback, no dual-name support, no leftover reference in code, tests,
-// fixtures, docs, or .env.example.
+// Repository-wide: zero tracked-file occurrences of the retired env var name
+// (this file's own prose describing that requirement excluded — see
+// SELF_PATH above). No fallback, no dual-name support, no leftover reference
+// in code, tests, fixtures, docs, or .env.example.
 // ===========================================================================
-function trackedOccurrences(needle: string): number {
+function trackedOccurrences(needle: string, opts: { excludeSelf?: boolean } = {}): number {
+  const pathspecs = opts.excludeSelf ? [".", `:(exclude)${SELF_PATH}`] : ["."];
   try {
-    const out = execFileSync("git", ["grep", "-c", needle], { cwd: repoRoot, encoding: "utf8" });
+    const out = execFileSync("git", ["grep", "-c", needle, "--", ...pathspecs], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
     return out
       .trim()
       .split("\n")
@@ -29,12 +39,19 @@ function trackedOccurrences(needle: string): number {
 }
 
 assert.equal(
-  trackedOccurrences("LINE_BOOKING_NOTIFY_GROUP_ID"),
+  trackedOccurrences("LINE_BOOKING_NOTIFY_GROUP_ID", { excludeSelf: true }),
   0,
-  "the retired LINE_BOOKING_NOTIFY_GROUP_ID name must have zero occurrences anywhere in the repository",
+  "the retired LINE_BOOKING_NOTIFY_GROUP_ID name must have zero occurrences anywhere in the repository (outside this file's own prose)",
 );
 // Sanity check on the probe itself: a name that legitimately exists must be found.
 assert.ok(trackedOccurrences("LINE_BOOKING_GROUP_ID") > 0, "sanity: trackedOccurrences must be able to find a real match");
+// Sanity check on the exclusion itself: without it, this file's own prose
+// must be exactly what gets counted — proves the exclusion is doing real
+// work, not silently matching nothing.
+assert.ok(
+  trackedOccurrences("LINE_BOOKING_NOTIFY_GROUP_ID") > 0,
+  "sanity: without excludeSelf, this file's own prose mentions of the retired name must be counted",
+);
 
 // ===========================================================================
 // serverEnv.notifyGroupId: reads only LINE_BOOKING_GROUP_ID. The old name,
