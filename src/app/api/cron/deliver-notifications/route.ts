@@ -9,13 +9,13 @@ export const dynamic = "force-dynamic";
 
 // Short-lived: the URL is minted right before sending and is never persisted
 // or logged. 5 minutes matches the admin-view signed URL TTL elsewhere.
-const FACE_URL_TTL_SECONDS = 300;
+const SLIP_URL_TTL_SECONDS = 300;
 
-async function signFaceUrl(storagePath: string): Promise<string | null> {
+async function signSlipUrl(storagePath: string): Promise<string | null> {
   try {
     const { data } = await supabaseAdmin()
-      .storage.from("booking-faces")
-      .createSignedUrl(storagePath, FACE_URL_TTL_SECONDS);
+      .storage.from("payment-slips")
+      .createSignedUrl(storagePath, SLIP_URL_TTL_SECONDS);
     return data?.signedUrl ?? null;
   } catch {
     return null;
@@ -66,7 +66,7 @@ export async function GET(req: Request) {
     db: supabaseAdmin(),
     sendPush: pushMessage,
     sendImage: pushImageMessage,
-    signFaceUrl,
+    signSlipUrl,
     appUrl: APP_URL || undefined,
     groupId,
     now: () => Date.now(),

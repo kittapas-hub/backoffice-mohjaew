@@ -3,10 +3,17 @@
 // Trust model: the client supplies ONLY the checkout token (URL) and the
 // image file. Amount, receiver, booking, and timestamps all come from the
 // database and the verification provider, server-side. The slip image is
-// forwarded to the provider and NEVER stored or logged.
+// forwarded to the provider and never logged.
 //
 // The confirmation itself is one atomic DB RPC (confirm_slip_payment) —
 // see supabase/migrations/0011_slip_verification.sql.
+//
+// Payment-slip evidence storage (0013_payment_slip_notification_image.sql):
+// once the image passes local validation, EasySlip provider verification,
+// and slip policy checks — i.e. right before this route calls
+// confirmSlipPayment — the original image is stored in the private
+// 'payment-slips' bucket and recorded in public.payment_slip_images. Images
+// that fail validation or provider verification are never stored.
 import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { recordRateHit } from "@/lib/booking-core";
@@ -33,6 +40,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const SLIP_EXT: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
 const RATE_LIMIT = 10; // uploads / window / hashed IP
 const RATE_WINDOW_SECONDS = 15 * 60;
 const MAX_ATTEMPTS_PER_ORDER = 10;
@@ -52,6 +64,40 @@ function buildProvider(): SlipVerificationProvider | null {
   const cfg = slipVerificationConfig();
   if (!cfg.enabled || cfg.provider !== "easyslip_v2" || !cfg.easySlipApiKey) return null;
   return easySlipProvider({ apiKey: cfg.easySlipApiKey });
+}
+
+// Best-effort payment-slip evidence storage. Never throws, never blocks
+// confirmation: a storage hiccup must not stop a real payment from being
+// confirmed, it just means no slip image gets attached to the team
+// notification. Uploads to storage FIRST, then records the DB row — if the
+// DB insert fails, the just-uploaded object is best-effort removed so a
+// failed evidence write never leaves an unreferenced file (see 0013's
+// migration header for the documented residual failure mode).
+async function storeSlipEvidence(
+  db: ReturnType<typeof supabaseAdmin>,
+  orderId: string,
+  bookingId: string,
+  image: Buffer,
+  mimeType: "image/jpeg" | "image/png" | "image/webp",
+): Promise<void> {
+  const path = `${bookingId}/${orderId}.${SLIP_EXT[mimeType]}`;
+  const { error: uploadErr } = await db.storage
+    .from("payment-slips")
+    .upload(path, image, { contentType: mimeType, upsert: true });
+  if (uploadErr) {
+    console.error("[slip] evidence upload failed", { orderId });
+    return;
+  }
+  const { error: insertErr } = await db.from("payment_slip_images").insert({
+    payment_order_id: orderId,
+    booking_id: bookingId,
+    storage_path: path,
+    mime_type: mimeType,
+  });
+  if (insertErr) {
+    await db.storage.from("payment-slips").remove([path]).catch(() => undefined);
+    console.error("[slip] evidence record failed, storage object removed", { orderId });
+  }
 }
 
 export async function POST(
@@ -272,6 +318,10 @@ export async function POST(
       message: `อ่านยอดโอนจากสลิปไม่ได้ กรุณาใช้สลิปต้นฉบับ หรือ${CONTACT_TEAM}`,
     });
   }
+
+  // Retain the validated original as payment evidence — only now, once local
+  // validation, provider verification, and policy checks have all passed.
+  await storeSlipEvidence(db, order.id, order.booking_id, image, imgCheck.meta.type);
 
   // One atomic, idempotent confirmation.
   const confirmed = await confirmSlipPayment({

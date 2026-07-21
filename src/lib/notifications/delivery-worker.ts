@@ -149,8 +149,14 @@ export function renderMessage(row: ClaimedRow, appUrl?: string): string {
   return renderPaymentReceivedMessage(row);
 }
 
-function imageStoragePath(row: ClaimedRow): string | null {
-  const v = row.payload?.image_storage_path;
+// slip_storage_path (0013_payment_slip_notification_image.sql): the actual
+// uploaded payment-slip image, never the customer's face photo. Never
+// present for admin_override (guarded explicitly here too, as defense in
+// depth — that path has no verified payment and must never attach or imply
+// one, even if a future payload change accidentally carried the field).
+function slipStoragePath(row: ClaimedRow): string | null {
+  if (row.payload?.confirmation_method === "admin_override") return null;
+  const v = row.payload?.slip_storage_path;
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
@@ -159,11 +165,12 @@ export type RpcResult = { data: unknown; error: { message: string } | null };
 export type Deps = {
   db: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<RpcResult> };
   sendPush: (to: string, text: string, retryKey: string) => Promise<PushResult>;
-  // Both optional: only booking_confirmed rows with an image_storage_path in
-  // their payload ever use these. Omitting them just means no image is
-  // attempted — the text summary is unaffected either way.
+  // Both optional: only rows with a slip_storage_path in their payload
+  // (booking_confirmed payment-verified paths, slip_manual_review) ever use
+  // these. Omitting them just means no image is attempted — the text
+  // summary is unaffected either way.
   sendImage?: (to: string, imageUrl: string, retryKey: string) => Promise<PushResult>;
-  signFaceUrl?: (storagePath: string) => Promise<string | null>;
+  signSlipUrl?: (storagePath: string) => Promise<string | null>;
   // Optional: absolute app URL used to build the "Backoffice: ..." link in
   // booking_confirmed/slip_manual_review messages. Omitted (or falsy) means
   // that line is left out of the message entirely — never a broken relative
@@ -215,17 +222,17 @@ async function completeDelivery(
   return "fence_lost";
 }
 
-// Signs and sends the face image for a confirmed booking. Swallows every
-// failure (signing error, send error, or a retryable/permanent push
-// rejection) behind a single fixed log literal — never the storage path,
-// signed URL, or group id — since image delivery is best-effort and must
-// never affect the row's retry/dead outcome.
+// Signs and sends the payment-slip image for a confirmed/manual-review
+// booking. Swallows every failure (signing error, send error, or a
+// retryable/permanent push rejection) behind a single fixed log literal —
+// never the storage path, signed URL, or group id — since image delivery is
+// best-effort and must never affect the row's retry/dead outcome.
 async function sendImageBestEffort(deps: Deps, row: ClaimedRow): Promise<void> {
-  if (!deps.signFaceUrl || !deps.sendImage) return;
-  const path = imageStoragePath(row);
+  if (!deps.signSlipUrl || !deps.sendImage) return;
+  const path = slipStoragePath(row);
   if (!path) return;
   try {
-    const url = await deps.signFaceUrl(path);
+    const url = await deps.signSlipUrl(path);
     if (!url) return;
     const result = await deps.sendImage(deps.groupId, url, row.image_retry_key);
     if (!result.ok) console.error("notification_image_send_failed");

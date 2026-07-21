@@ -13,7 +13,7 @@
 //      require (384 legacy hourly open slots across 32 dates, zero
 //      canonical session rows, zero referencing bookings) and verifies it
 //      before proceeding.
-//   5. Applies 0010, 0011, 0012.
+//   5. Applies 0010, 0011, 0012, 0013.
 //   6. Runs `npm run test:pg` as a child process with PG_INTEGRATION_URL set
 //      ONLY on that child's environment — never exported to this process or
 //      any other command.
@@ -212,7 +212,11 @@ try {
 
   await applyMigration("0012_booking_confirmed_notification.sql");
   await runPassFailVerifier("verify_0012_post_migration.sql");
-  console.log("[test-pg-embedded] all migrations 0001-0012 applied successfully.");
+
+  await runPassFailVerifier("verify_0013_production_preflight.sql");
+  await applyMigration("0013_payment_slip_notification_image.sql");
+  await runPassFailVerifier("verify_0013_post_migration.sql");
+  console.log("[test-pg-embedded] all migrations 0001-0013 applied successfully.");
 
   await client.end();
 

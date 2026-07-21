@@ -48,6 +48,7 @@ try {
   const fixtureBookings =
     "select b.id from public.bookings b join public.booking_slots s on s.id=b.slot_id where s.label='PG integration booking_confirmed'";
   await db.query(`delete from public.notification_deliveries where booking_id in (${fixtureBookings})`);
+  await db.query(`delete from public.payment_slip_images where booking_id in (${fixtureBookings})`);
   await db.query(`delete from public.payment_slip_verifications where booking_id in (${fixtureBookings})`);
   await db.query(`delete from public.payment_transactions where booking_id in (${fixtureBookings})`);
   await db.query(`delete from public.payment_orders where booking_id in (${fixtureBookings})`);
@@ -85,6 +86,19 @@ try {
     return id;
   }
 
+  // Simulates the TS upload route's evidence write (0013_payment_slip_notification_image.sql):
+  // this integration suite calls the RPCs directly, bypassing the route, so
+  // the payment_slip_images row that would normally precede the RPC call is
+  // inserted explicitly here.
+  async function slipEvidence(orderId: string, bookingId: string): Promise<string> {
+    const path = `${bookingId}/${orderId}.jpg`;
+    await db.query(
+      "insert into public.payment_slip_images(payment_order_id, booking_id, storage_path, mime_type) values ($1,$2,$3,'image/jpeg')",
+      [orderId, bookingId, path],
+    );
+    return path;
+  }
+
   async function confirmedNotifications(bookingId: string) {
     return (await db.query(
       `select id, recipient_type, channel, idempotency_key, payload, line_retry_key, image_retry_key
@@ -108,7 +122,7 @@ try {
     payload: Record<string, unknown>,
     bookingId: string,
     expectedMethod: string,
-    expectedImagePath: string | null,
+    expectedSlipPath: string | undefined,
     expectedAmounts: { expected: number; received: number } | null = null,
   ) {
     assert.equal(payload.booking_id, bookingId);
@@ -122,7 +136,10 @@ try {
     assert.equal(payload.confirmation_method, expectedMethod);
     assert.ok(payload.booking_date);
     assert.ok(payload.updated_at);
-    assert.equal(payload.image_storage_path, expectedImagePath);
+    // slip_storage_path (0013), never image_storage_path (the retired,
+    // ambiguous face/slip field) — admin_override never has either.
+    assert.equal(payload.slip_storage_path, expectedSlipPath);
+    assert.equal(payload.image_storage_path, undefined, "image_storage_path must never appear — slip_storage_path replaces it");
     if (expectedAmounts) {
       assert.equal(payload.expected_amount_satang, expectedAmounts.expected);
       assert.equal(payload.received_amount_satang, expectedAmounts.received);
@@ -134,7 +151,9 @@ try {
   }
 
   // =========================================================================
-  // Path 1: admin non-payment override (transition_slot_booking), with image.
+  // Path 1: admin non-payment override (transition_slot_booking). A face
+  // image is on file, but admin_override must never attach ANY image (face
+  // or slip) and must never imply a payment was received.
   // =========================================================================
   {
     const id = await booking({ withImage: true });
@@ -144,7 +163,7 @@ try {
     assert.equal(rows[0].recipient_type, "team");
     assert.equal(rows[0].channel, "line");
     assert.equal(rows[0].idempotency_key, `booking:confirmed:team:${id}`);
-    assertSummaryPayload(rows[0].payload, id, "admin_override", `pg-integration/${id}.jpg`);
+    assertSummaryPayload(rows[0].payload, id, "admin_override", undefined);
 
     // HIGH-4: image_retry_key is persisted, non-null, and distinct from
     // line_retry_key — never the same value, never regenerated per read.
@@ -167,15 +186,20 @@ try {
     await db.query("select public.transition_slot_booking($1,'confirmed')", [id]);
     const rows = await confirmedNotifications(id);
     assert.equal(rows.length, 1);
-    assertSummaryPayload(rows[0].payload, id, "admin_override", null);
+    assertSummaryPayload(rows[0].payload, id, "admin_override", undefined);
   }
 
   // =========================================================================
-  // Path 2: manual payment review approval.
+  // Path 2: manual payment review approval. The retained slip evidence (from
+  // the original upload attempt that put the order into manual_review) must
+  // be the image the approval's booking_confirmed notification carries —
+  // never the customer's face photo (withImage: true here proves it's
+  // ignored).
   // =========================================================================
   {
     const id = await booking({ withImage: true });
     const orderId = await order(id, "manual");
+    const slipPath = await slipEvidence(orderId, id);
     // Wrong profile forces manual_review instead of automatic confirmation.
     const forced = (await db.query(
       `select public.confirm_slip_payment($1,'promptpay_slip','REF PG MANUAL',now(),99900,'THB',$2,'{}'::jsonb) as result`,
@@ -188,7 +212,7 @@ try {
     assert.equal(approved.result, "ok");
     const rows = await confirmedNotifications(id);
     assert.equal(rows.length, 1, "manual review approval must enqueue exactly one booking_confirmed notification");
-    assertSummaryPayload(rows[0].payload, id, "manual_review_approved", `pg-integration/${id}.jpg`, {
+    assertSummaryPayload(rows[0].payload, id, "manual_review_approved", slipPath, {
       expected: 99900,
       received: 99900,
     });
@@ -208,11 +232,14 @@ try {
   }
 
   // =========================================================================
-  // Path 3: EasySlip automatic confirmation.
+  // Path 3: EasySlip automatic confirmation. The actual uploaded slip image
+  // must be attached — never the customer's face photo (no face image on
+  // file here at all, so any image field would have to be the slip).
   // =========================================================================
   {
     const id = await booking({ withImage: false });
     const orderId = await order(id, "auto");
+    const slipPath = await slipEvidence(orderId, id);
     const result = (await db.query(
       `select public.confirm_slip_payment($1,'promptpay_slip','REF PG AUTO',now(),99900,'THB','profile-test','{}'::jsonb) as result`,
       [orderId],
@@ -220,7 +247,7 @@ try {
     assert.equal(result.result, "ok");
     const rows = await confirmedNotifications(id);
     assert.equal(rows.length, 1, "EasySlip automatic confirmation must enqueue exactly one booking_confirmed notification");
-    assertSummaryPayload(rows[0].payload, id, "easyslip_auto", null, { expected: 99900, received: 99900 });
+    assertSummaryPayload(rows[0].payload, id, "easyslip_auto", slipPath, { expected: 99900, received: 99900 });
     assert.equal(
       (await paymentReceivedNotifications(id)).length,
       0,
@@ -246,6 +273,7 @@ try {
   {
     const id = await booking({ withImage: false });
     const orderId = await order(id, "mismatch");
+    const slipPath = await slipEvidence(orderId, id);
     const result = (await db.query(
       `select public.confirm_slip_payment($1,'promptpay_slip','REF PG MISMATCH',now(),100,'THB','profile-test','{}'::jsonb) as result`,
       [orderId],
@@ -274,6 +302,7 @@ try {
     assert.equal(payload.reason, "amount_mismatch");
     assert.equal(payload.expected_amount_satang, 99900);
     assert.equal(payload.received_amount_satang, 100);
+    assert.equal(payload.slip_storage_path, slipPath, "a manual-review alert must carry the same slip evidence as a successful confirmation");
     assert.equal(payload.provider_payload, undefined, "the alert must never carry the full provider payload");
   }
 
@@ -481,6 +510,7 @@ try {
   }
   if (ids.orders.length) await db.query("delete from public.notification_deliveries where payment_order_id=any($1::uuid[])", [ids.orders]);
   if (ids.bookings.length) await db.query("delete from public.notification_deliveries where booking_id=any($1::uuid[])", [ids.bookings]);
+  if (ids.orders.length) await db.query("delete from public.payment_slip_images where payment_order_id=any($1::uuid[])", [ids.orders]);
   if (ids.orders.length) await db.query("delete from public.payment_slip_verifications where payment_order_id=any($1::uuid[])", [ids.orders]);
   if (ids.orders.length) await db.query("delete from public.payment_transactions where payment_order_id=any($1::uuid[])", [ids.orders]);
   if (ids.orders.length) await db.query("delete from public.payment_orders where id=any($1::uuid[])", [ids.orders]);

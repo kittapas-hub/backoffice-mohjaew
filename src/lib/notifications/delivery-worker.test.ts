@@ -150,7 +150,8 @@ function makeRow(id: string): ClaimedRow {
 }
 
 // makeConfirmedRow: mirrors the exact payload shape written by
-// 0012_booking_confirmed_notification.sql — no invented fields.
+// 0012_booking_confirmed_notification.sql / 0013_payment_slip_notification_image.sql
+// — no invented fields.
 function makeConfirmedRow(
   id: string,
   opts: { imagePath?: string | null; confirmationMethod?: string; amounts?: boolean } = {},
@@ -175,7 +176,7 @@ function makeConfirmedRow(
       confirmation_method: confirmationMethod,
       ...(amounts ? { expected_amount_satang: 99900, received_amount_satang: 99900 } : {}),
       updated_at: "2026-07-14T10:00:00Z",
-      image_storage_path: "imagePath" in opts ? opts.imagePath : `booking-${id}/face.jpg`,
+      slip_storage_path: "imagePath" in opts ? opts.imagePath : `booking-${id}/slip.jpg`,
     },
     idempotency_key: `booking:confirmed:team:booking-${id}`,
     attempt_count: 0,
@@ -628,7 +629,7 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
 }
 
 // ===========================================================================
-// runDeliveryWorker: booking_confirmed row with an image_storage_path sends
+// runDeliveryWorker: booking_confirmed row with a slip_storage_path sends
 // text (with its stable line_retry_key) THEN signs + sends the image (with
 // its OWN stable image_retry_key — never the text's key), both addressed to
 // the same groupId (never a customer/different recipient).
@@ -659,7 +660,7 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
       assert.match(text, /ได้รับชำระเงินและยืนยันการจองแล้ว/);
       return { ok: true };
     },
-    signFaceUrl: async (path) => {
+    signSlipUrl: async (path) => {
       signedPaths.push(path);
       return `https://signed.example/${path}`;
     },
@@ -675,11 +676,11 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
   assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
   assert.deepEqual(pushedTo, ["correct-group-id"]);
   assert.deepEqual(pushedRetryKeys, ["22222222-2222-4222-8222-222222222222"]);
-  assert.deepEqual(signedPaths, ["booking-1/face.jpg"]);
+  assert.deepEqual(signedPaths, ["booking-1/slip.jpg"]);
   assert.deepEqual(imageSentTo, [
     {
       to: "correct-group-id",
-      url: "https://signed.example/booking-1/face.jpg",
+      url: "https://signed.example/booking-1/slip.jpg",
       retryKey: "33333333-3333-4333-8333-333333333333",
     },
   ]);
@@ -714,7 +715,7 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
   await runDeliveryWorker({
     db,
     sendPush: async () => ({ ok: true }),
-    signFaceUrl: async (path) => `https://signed.example/${path}`,
+    signSlipUrl: async (path) => `https://signed.example/${path}`,
     sendImage: async (_to, _url, retryKey) => {
       seenRetryKeys.push(retryKey);
       return { ok: true };
@@ -731,8 +732,8 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
 }
 
 // ===========================================================================
-// runDeliveryWorker: booking_confirmed row with no image_storage_path sends
-// text only — signFaceUrl/sendImage are never called.
+// runDeliveryWorker: booking_confirmed row with no slip_storage_path sends
+// text only — signSlipUrl/sendImage are never called.
 // ===========================================================================
 {
   let claimCount = 0;
@@ -751,7 +752,7 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
   const result = await runDeliveryWorker({
     db,
     sendPush: async () => ({ ok: true }),
-    signFaceUrl: async (path) => {
+    signSlipUrl: async (path) => {
       signCalled = true;
       return `https://signed.example/${path}`;
     },
@@ -770,7 +771,96 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
 }
 
 // ===========================================================================
-// runDeliveryWorker: booking_confirmed row also works with signFaceUrl/
+// runDeliveryWorker: admin_override must never attempt an image send, even
+// if a payload somehow carried a slip_storage_path (defense in depth — this
+// path has no verified payment and must never attach or imply one).
+// ===========================================================================
+{
+  let claimCount = 0;
+  let signCalled = false;
+  let imageCalled = false;
+  const db = {
+    rpc: async (fn: string) => {
+      if (fn === "claim_team_notification_deliveries") {
+        claimCount++;
+        if (claimCount === 1) {
+          const row = makeConfirmedRow("override", { confirmationMethod: "admin_override", amounts: false });
+          row.payload = { ...row.payload, slip_storage_path: "booking-override/slip.jpg" };
+          return { data: [row], error: null };
+        }
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const result = await runDeliveryWorker({
+    db,
+    sendPush: async () => ({ ok: true }),
+    signSlipUrl: async (path) => {
+      signCalled = true;
+      return `https://signed.example/${path}`;
+    },
+    sendImage: async () => {
+      imageCalled = true;
+      return { ok: true };
+    },
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
+  assert.equal(signCalled, false, "admin_override must never sign a slip URL even if the payload carries one");
+  assert.equal(imageCalled, false, "admin_override must never send an image");
+}
+
+// ===========================================================================
+// runDeliveryWorker: a slip_manual_review row with a slip_storage_path also
+// sends the slip image after its text — the amount-mismatch/manual-review
+// alert gets the same evidence image as a successful confirmation.
+// ===========================================================================
+{
+  let claimCount = 0;
+  const signedPaths: string[] = [];
+  const imageSentTo: { to: string; url: string; retryKey: string }[] = [];
+  const db = {
+    rpc: async (fn: string) => {
+      if (fn === "claim_team_notification_deliveries") {
+        claimCount++;
+        if (claimCount === 1) {
+          const row = makeManualReviewRow("with-slip");
+          row.payload = { ...row.payload, slip_storage_path: "booking-with-slip/order-with-slip.jpg" };
+          return { data: [row], error: null };
+        }
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const result = await runDeliveryWorker({
+    db,
+    sendPush: async () => ({ ok: true }),
+    signSlipUrl: async (path) => {
+      signedPaths.push(path);
+      return `https://signed.example/${path}`;
+    },
+    sendImage: async (to, url, retryKey) => {
+      imageSentTo.push({ to, url, retryKey });
+      return { ok: true };
+    },
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
+  assert.deepEqual(signedPaths, ["booking-with-slip/order-with-slip.jpg"]);
+  assert.equal(imageSentTo.length, 1, "slip_manual_review must send the slip image once, after the text");
+  assert.equal(imageSentTo[0].retryKey, "55555555-5555-4555-8555-555555555555");
+}
+
+// ===========================================================================
+// runDeliveryWorker: booking_confirmed row also works with signSlipUrl/
 // sendImage entirely omitted (route always supplies them, but the worker
 // must not crash if it doesn't) — text still sends.
 // ===========================================================================
@@ -819,7 +909,7 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
     runDeliveryWorker({
       db,
       sendPush: async () => ({ ok: true }),
-      signFaceUrl: async () => {
+      signSlipUrl: async () => {
         throw new Error("leaked-signing-detail-secret-path");
       },
       sendImage: async () => ({ ok: true }),
