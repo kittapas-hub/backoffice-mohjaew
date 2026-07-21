@@ -29,7 +29,7 @@ function fnBody(src: string, name: string): string {
 }
 
 const actionFiles: Record<string, string[]> = {
-  "admin/actions.ts": ["updateStatus", "transitionSlotBooking", "confirmPayment"],
+  "admin/actions.ts": ["updateStatus", "transitionSlotBooking", "confirmPayment", "confirmBookingOverride"],
   "admin/day/actions.ts": ["seedDaySlots", "updateSlotCapacity", "toggleSlot"],
 };
 
@@ -48,7 +48,7 @@ for (const [file, names] of Object.entries(actionFiles)) {
 // status is hardcoded server-side so a forged FormData cannot change it.
 {
   const src = readFileSync(join(appDir, "admin/actions.ts"), "utf8");
-  const body = fnBody(src, "confirmPayment");
+  const body = fnBody(src, "confirmBookingOverride");
   assert.doesNotMatch(
     body,
     /formData\.get\(["']to["']\)/,
@@ -92,6 +92,16 @@ for (const [file, names] of Object.entries(actionFiles)) {
     /\.insert\(|create_booking|createSlotBooking/,
     "confirmPayment must never create a booking",
   );
+}
+
+// Verified manual payment approval accepts only the booking id and delegates
+// transaction selection to the restricted PostgreSQL approval RPC.
+{
+  const src = readFileSync(join(appDir, "admin/actions.ts"), "utf8");
+  const body = fnBody(src, "confirmPayment");
+  assert.match(body, /rpc\(["']approve_manual_review_payment["']/);
+  assert.doesNotMatch(body, /formData\.get\(["'](transaction|txRef|providerTxRef)["']\)/);
+  assert.doesNotMatch(body, /transition_slot_booking/);
 }
 
 // A slotless LINE inquiry may be contacted/cancelled, but never confirmed as a

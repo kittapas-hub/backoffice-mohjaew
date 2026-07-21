@@ -1,15 +1,50 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { pushMessage } from "@/lib/line";
-import { runDeliveryWorker, DEFAULT_BATCH, TIME_BUDGET_MS } from "@/lib/notifications/delivery-worker";
+import { pushMessage, pushImageMessage, validateLineGroupId } from "@/lib/line";
+import {
+  runDeliveryWorker,
+  runImageDeliveryWorker,
+  DEFAULT_BATCH,
+  TIME_BUDGET_MS,
+} from "@/lib/notifications/delivery-worker";
+import { APP_URL } from "@/lib/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Delivers only recipient_type = 'team', event_type = 'payment_received' rows
-// from the outbox (0007_team_notification_outbox.sql). Auth mirrors
-// /api/cron/expire-bookings exactly: missing CRON_SECRET => 503 (never
-// public), wrong/missing bearer token => 401.
+// Short-lived: the URL is minted right before sending and is never persisted
+// or logged. 5 minutes matches the admin-view signed URL TTL elsewhere.
+const IMAGE_URL_TTL_SECONDS = 300;
+
+async function signFaceUrl(storagePath: string): Promise<string | null> {
+  try {
+    const { data } = await supabaseAdmin()
+      .storage.from("booking-faces")
+      .createSignedUrl(storagePath, IMAGE_URL_TTL_SECONDS);
+    return data?.signedUrl ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function signSlipUrl(storagePath: string): Promise<string | null> {
+  try {
+    const { data } = await supabaseAdmin()
+      .storage.from("payment-slips")
+      .createSignedUrl(storagePath, IMAGE_URL_TTL_SECONDS);
+    return data?.signedUrl ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Delivers only recipient_type = 'team' rows (payment_received,
+// slip_manual_review, booking_confirmed) from the outbox
+// (0007_team_notification_outbox.sql, 0011_slip_verification.sql,
+// 0012_booking_confirmed_notification.sql), then independently delivers any
+// due face/slip image rows (0013_payment_slip_notification_image.sql). Auth
+// mirrors /api/cron/expire-bookings exactly: missing CRON_SECRET => 503
+// (never public), wrong/missing bearer token => 401.
 export async function GET(req: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
@@ -26,24 +61,34 @@ export async function GET(req: Request) {
   // Kill switch: OFF unless explicitly the literal string "true". No row is
   // claimed while disabled.
   if (process.env.OUTBOX_DELIVERY_ENABLED !== "true") {
-    return NextResponse.json({ ok: true, enabled: false, processed: 0, sent: 0, retried: 0, dead: 0 });
+    return NextResponse.json({
+      ok: true,
+      enabled: false,
+      processed: 0, sent: 0, retried: 0, dead: 0,
+      images: { processed: 0, sent: 0, retried: 0, dead: 0 },
+    });
   }
 
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  const groupId = process.env.LINE_BOOKING_NOTIFY_GROUP_ID;
+  // Fails closed on blank/whitespace/malformed values (including a userId
+  // "U…" or roomId "R…" mistakenly pasted in place of a groupId "C…") before
+  // any row is ever claimed — there is no fallback recipient.
+  const groupId = validateLineGroupId(process.env.LINE_BOOKING_GROUP_ID);
   if (!token || !groupId) {
     return NextResponse.json(
       {
         error: "line_not_configured",
-        message: "LINE_CHANNEL_ACCESS_TOKEN or LINE_BOOKING_NOTIFY_GROUP_ID is not configured",
+        message: "LINE_CHANNEL_ACCESS_TOKEN is missing or LINE_BOOKING_GROUP_ID is missing/invalid",
       },
       { status: 503 },
     );
   }
 
+  const db = supabaseAdmin();
   const result = await runDeliveryWorker({
-    db: supabaseAdmin(),
+    db,
     sendPush: pushMessage,
+    appUrl: APP_URL || undefined,
     groupId,
     now: () => Date.now(),
     batch: DEFAULT_BATCH,
@@ -56,6 +101,25 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "worker_failed" }, { status: 500 });
   }
 
+  // Image delivery is entirely independent of the text loop above — it runs
+  // regardless of how many (if any) text rows were just claimed, since a
+  // face/slip row can still be outstanding from an earlier cron tick whose
+  // text row has long since reached 'sent'.
+  const imageResult = await runImageDeliveryWorker({
+    db,
+    sendImage: pushImageMessage,
+    signFaceUrl,
+    signSlipUrl,
+    groupId,
+    now: () => Date.now(),
+    batch: DEFAULT_BATCH,
+    timeBudgetMs: TIME_BUDGET_MS,
+  });
+
+  if (!imageResult.ok) {
+    return NextResponse.json({ error: "image_worker_failed" }, { status: 500 });
+  }
+
   return NextResponse.json({
     ok: true,
     enabled: true,
@@ -63,5 +127,11 @@ export async function GET(req: Request) {
     sent: result.sent,
     retried: result.retried,
     dead: result.dead,
+    images: {
+      processed: imageResult.processed,
+      sent: imageResult.sent,
+      retried: imageResult.retried,
+      dead: imageResult.dead,
+    },
   });
 }

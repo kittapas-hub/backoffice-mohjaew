@@ -27,7 +27,7 @@ export const serverEnv = {
     return required("LINE_CHANNEL_ACCESS_TOKEN");
   },
   get notifyGroupId() {
-    return required("LINE_BOOKING_NOTIFY_GROUP_ID");
+    return required("LINE_BOOKING_GROUP_ID");
   },
   // Used to HMAC the client IP for DB-backed rate limiting. Required when
   // POST /api/bookings is reachable (the route returns a 500 config error if
@@ -47,6 +47,40 @@ export function adminEmails(): string[] {
 export function isAdminEmail(email: string | null | undefined): boolean {
   if (!email) return false;
   return adminEmails().includes(email.toLowerCase());
+}
+
+// Slip verification (EasySlip) — SERVER-ONLY. The API key must never reach
+// the browser bundle; only server modules may call this.
+// receiverProfile is the immutable, owner-approved profile identifier stored
+// on each order. The account/name values are a second server-side check of
+// EasySlip v2's registered-account result. Missing any part fails closed.
+export function slipVerificationConfig() {
+  const split = (v: string | undefined) =>
+    (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return {
+    enabled: process.env.SLIP_VERIFICATION_ENABLED === "true" &&
+      process.env.SLIP_VERIFICATION_PROVIDER === "easyslip_v2",
+    provider: process.env.SLIP_VERIFICATION_PROVIDER ?? "",
+    easySlipApiKey: process.env.EASYSLIP_API_KEY ?? "",
+    receiverProfile: process.env.SLIP_RECEIVER_PROFILE ?? "",
+    receiverAccounts: split(process.env.SLIP_RECEIVER_ACCOUNTS),
+    receiverNames: split(process.env.SLIP_RECEIVER_NAMES),
+  };
+}
+
+/** Explicit server-only release gate. Credentials never enable automation. */
+export function slipVerificationEnabled(): boolean {
+  return slipVerificationConfig().enabled;
+}
+
+// Trusted booking price in satang, from BOOKING_PAYMENT_AMOUNT_THB.
+// Null when unset/invalid — payment orders are then not created and the
+// pre-Phase-1 manual flow is the only path.
+export function paymentAmountSatang(): number | null {
+  const raw = process.env.BOOKING_PAYMENT_AMOUNT_THB ?? "";
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100);
 }
 
 // Payment instructions displayed on /booking/success.

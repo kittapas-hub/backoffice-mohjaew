@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types src/lib/slots.test.ts && node --experimental-strip-types src/lib/booking-flow.test.ts && node --experimental-strip-types src/lib/client-ip.test.ts && node --experimental-strip-types src/lib/slot-seeding.test.ts && node --experimental-strip-types src/lib/session-cutover.test.ts && node --experimental-strip-types src/lib/auth-guard.test.ts && node --experimental-strip-types src/lib/integration-guards.test.ts && node --experimental-strip-types src/lib/line.test.ts && node --experimental-strip-types src/lib/payments/payments.test.ts && node --experimental-strip-types src/lib/payments/hold-expiry.test.ts && node --experimental-strip-types src/lib/notifications/notification-outbox.test.ts && node --experimental-strip-types src/lib/notifications/delivery-worker.test.ts && node --experimental-strip-types src/app/booking/success/success-page.test.ts && node --experimental-strip-types src/app/admin/admin-search.test.ts"
+    "test": "node --experimental-strip-types src/lib/slots.test.ts && node --experimental-strip-types src/lib/booking-flow.test.ts && node --experimental-strip-types src/lib/client-ip.test.ts && node --experimental-strip-types src/lib/slot-seeding.test.ts && node --experimental-strip-types src/lib/session-cutover.test.ts && node --experimental-strip-types src/lib/reconciliation-migration.test.ts && node --experimental-strip-types src/lib/auth-guard.test.ts && node --experimental-strip-types src/lib/integration-guards.test.ts && node --experimental-strip-types src/lib/env.test.ts && node --experimental-strip-types src/lib/line.test.ts && node --experimental-strip-types src/lib/payments/payments.test.ts && node --experimental-strip-types src/lib/payments/hold-expiry.test.ts && node --experimental-strip-types src/lib/image-meta.test.ts && node --experimental-strip-types src/lib/payments/slip/upload-guard.test.ts && node --experimental-strip-types src/lib/payments/slip/slip-policy.test.ts && node --experimental-strip-types src/lib/payments/slip/easyslip.test.ts && node --experimental-strip-types src/lib/payments/slip/slip-feature-gate.test.ts && node --experimental-strip-types src/lib/payments/slip/slip-confirm.test.ts && node --experimental-strip-types src/lib/notifications/notification-outbox.test.ts && node --experimental-strip-types src/lib/notifications/delivery-worker.test.ts && node --experimental-strip-types src/lib/notifications/booking-confirmed-notification.test.ts && node --experimental-strip-types src/lib/notifications/payment-slip-notification-image.test.ts && node --experimental-strip-types supabase/verify_0012_post_migration.test.ts && node --experimental-strip-types supabase/verify_0012_production_preflight.test.ts && node --experimental-strip-types supabase/verify_0013_production_preflight.test.ts && node --experimental-strip-types supabase/verify_0013_post_migration.test.ts && node --experimental-strip-types src/app/booking/success/success-page.test.ts && node --experimental-strip-types src/app/admin/admin-search.test.ts && node --experimental-strip-types scripts/pg-cleanup.test.ts",
+    "test:pg": "node --experimental-strip-types src/lib/payments/slip/slip-postgres.integration.test.ts && node --experimental-strip-types src/lib/notifications/booking-confirmed-notification.integration.test.ts",
+    "test:pg:embedded": "node --experimental-strip-types scripts/test-pg-embedded.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
@@ -20,10 +22,13 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "embedded-postgres": "^18.4.0-beta.17",
     "eslint": "^9.39.4",
     "eslint-config-next": "^15.5.19",
+    "pg": "^8.22.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0"
   }

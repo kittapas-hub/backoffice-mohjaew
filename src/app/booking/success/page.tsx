@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getBookingByToken, type BookingTokenData } from "@/lib/booking-core";
-import { paymentConfig } from "@/lib/env";
+import { paymentConfig, paymentAmountSatang, slipVerificationConfig } from "@/lib/env";
 import { BookingStatusPanel } from "./BookingStatusPanel";
 import { buildLineHref, buildLinePrefill } from "./helpers";
 import { Wrapper, IconCircle, formatThaiDeadline } from "./ui";
@@ -50,6 +50,26 @@ export default async function BookingSuccess({
   const linePrefillText = buildLinePrefill({ reference: booking.reference });
   const lineHref = buildLineHref(cfg.lineOaUrl, linePrefillText);
 
+  // Rendering is read-only. The client performs explicit POST-only,
+  // idempotent order creation when the customer chooses slip verification.
+  let slipOrderUrl: string | null = null;
+  const amountSatang = paymentAmountSatang();
+  const slipCfg = slipVerificationConfig();
+  const holdLive = Boolean(
+    booking.holdExpiresAt &&
+      new Date(booking.holdExpiresAt).getTime() > Date.now(),
+  );
+  if (
+    booking.status === "pending_payment" &&
+    holdLive &&
+    amountSatang !== null &&
+    slipCfg.enabled && slipCfg.easySlipApiKey && slipCfg.receiverProfile &&
+    slipCfg.receiverAccounts.length > 0 && slipCfg.receiverNames.length > 0 &&
+    process.env.PAYMENT_ORDER_IDEMPOTENCY_SECRET
+  ) {
+    slipOrderUrl = `/api/pay/${token}/order`;
+  }
+
   return (
     <BookingStatusPanel
       token={token}
@@ -68,6 +88,7 @@ export default async function BookingSuccess({
       accountName={cfg.accountName}
       accountNumber={cfg.accountNumber}
       lineHref={lineHref}
+      slipOrderUrl={slipOrderUrl}
     />
   );
 }
