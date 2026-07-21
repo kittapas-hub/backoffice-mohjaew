@@ -23,7 +23,14 @@ required_columns(table_name, column_name, expect_not_null) as (
     ('payment_slip_images', 'booking_id', true),
     ('payment_slip_images', 'storage_path', true),
     ('payment_slip_images', 'mime_type', true),
-    ('payment_slip_images', 'created_at', true)
+    ('payment_slip_evidence_failures', 'payment_order_id', true),
+    ('payment_slip_evidence_failures', 'stage', true),
+    ('notification_image_deliveries', 'notification_delivery_id', true),
+    ('notification_image_deliveries', 'image_kind', true),
+    ('notification_image_deliveries', 'storage_path', true),
+    ('notification_image_deliveries', 'status', true),
+    ('notification_image_deliveries', 'attempt_count', true),
+    ('notification_image_deliveries', 'line_retry_key', true)
 ),
 column_summary as (
   select
@@ -39,7 +46,11 @@ column_summary as (
 ),
 required_indexes(index_name, expect_unique) as (
   values
-    ('payment_slip_images_order_idx', false)
+    ('payment_slip_images_order_idx', false),
+    ('payment_slip_evidence_failures_order_idx', false),
+    ('notification_image_deliveries_due_idx', false),
+    ('notification_image_deliveries_locked_idx', false),
+    ('notification_image_deliveries_line_retry_key_uniq', true)
 ),
 index_summary as (
   select
@@ -56,8 +67,21 @@ index_summary as (
   left join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
   left join pg_index i on i.indexrelid = c.oid
 ),
+notification_image_deliveries_unique_pair as (
+  select count(*)::int as n
+  from pg_constraint con
+  join pg_class c on c.oid = con.conrelid
+  join pg_namespace nsp on nsp.oid = c.relnamespace
+  where nsp.nspname = 'public' and c.relname = 'notification_image_deliveries'
+    and con.contype = 'u'
+    and (
+      select array_agg(attname::text order by attname)
+      from pg_attribute
+      where attrelid = con.conrelid and attnum = any(con.conkey)
+    ) = array['image_kind', 'notification_delivery_id']
+),
 sensitive_tables(table_name) as (
-  values ('payment_slip_images')
+  values ('payment_slip_images'), ('payment_slip_evidence_failures'), ('notification_image_deliveries')
 ),
 table_security_summary as (
   select
@@ -76,6 +100,42 @@ table_security_summary as (
   left join pg_class c on c.oid = to_regclass('public.' || t.table_name)
   cross join roles r
 ),
+required_image_rpcs(signature, expect_definer, require_pinned_path) as (
+  values
+    ('public.claim_notification_image_deliveries(text,integer)'::text, true, true),
+    ('public.complete_notification_image_delivery(uuid,text,text,text)'::text, true, true)
+),
+image_rpc_rows as (
+  select r.*, p.oid, p.prosecdef, p.proconfig
+  from required_image_rpcs r
+  left join pg_proc p on p.oid = to_regprocedure(r.signature)
+),
+image_rpc_summary as (
+  select
+    count(*)::int as expected_count,
+    count(oid)::int as present_count,
+    count(*) filter (
+      where oid is not null
+        and prosecdef = expect_definer
+        and coalesce(proconfig, '{}'::text[]) @> array['search_path=public, pg_temp']
+    )::int as hardened_count
+  from image_rpc_rows
+),
+image_rpc_acl_summary as (
+  select
+    count(*)::int as expected_count,
+    count(*) filter (
+      where f.oid is not null
+        and r.anon_oid is not null
+        and r.authenticated_oid is not null
+        and r.service_oid is not null
+        and not coalesce(has_function_privilege(r.anon_oid, f.oid, 'EXECUTE'), false)
+        and not coalesce(has_function_privilege(r.authenticated_oid, f.oid, 'EXECUTE'), false)
+        and coalesce(has_function_privilege(r.service_oid, f.oid, 'EXECUTE'), false)
+    )::int as safe_count
+  from image_rpc_rows f
+  cross join roles r
+),
 required_functions(signature) as (
   values
     ('public.transition_slot_booking(uuid,text)'::text),
@@ -87,19 +147,28 @@ confirmation_functions as (
   from required_functions r
   join pg_proc p on p.oid = to_regprocedure(r.signature)
 ),
-slip_field_summary as (
+image_task_summary as (
   select
     count(*) filter (
-      where proname in ('confirm_slip_payment', 'approve_manual_review_payment')
-        and position(quote_literal('slip_storage_path') in prosrc) > 0
-    )::int as functions_with_slip_field,
+      where proname in ('confirm_slip_payment', 'transition_slot_booking')
+        and position(quote_literal('face') in prosrc) > 0
+        and position('notification_image_deliveries' in prosrc) > 0
+    )::int as functions_enqueue_face,
     count(*) filter (
-      where position(quote_literal('image_storage_path') in prosrc) > 0
-    )::int as functions_still_with_face_field,
+      where proname = 'confirm_slip_payment'
+        and position(quote_literal('payment_slip') in prosrc) > 0
+    )::int as confirm_slip_payment_enqueues_slip,
     count(*) filter (
       where proname = 'transition_slot_booking'
-        and (position('booking_images' in prosrc) > 0 or position('payment_slip_images' in prosrc) > 0)
-    )::int as admin_override_with_image_lookup
+        and position(quote_literal('payment_slip') in prosrc) > 0
+    )::int as admin_override_enqueues_slip,
+    count(*) filter (
+      where proname = 'approve_manual_review_payment'
+        and position('notification_image_deliveries' in prosrc) > 0
+    )::int as approve_creates_image_rows,
+    count(*) filter (
+      where position(quote_literal('image_storage_path') in prosrc) > 0
+    )::int as functions_still_with_retired_field
   from confirmation_functions
 ),
 function_count as (
@@ -122,21 +191,36 @@ checks(check_name, pass, evidence) as (
   select 'required_0013_indexes', expected_count = present_count and expected_count = valid_count,
     format('valid_indexes=%s/%s', valid_count, expected_count) from index_summary
   union all
-  select 'payment_slip_images_rls_and_acl', expected_count = safe_count,
+  select 'notification_image_deliveries_unique_per_kind', n = 1,
+    format('unique_constraints=%s', n) from notification_image_deliveries_unique_pair
+  union all
+  select 'payment_slip_tables_rls_and_acl', expected_count = safe_count,
     format('safe_tables=%s/%s', safe_count, expected_count) from table_security_summary
+  union all
+  select 'image_delivery_rpcs_present_and_hardened', expected_count = present_count and expected_count = hardened_count,
+    format('hardened=%s/%s', hardened_count, expected_count) from image_rpc_summary
+  union all
+  select 'image_delivery_rpc_acl_service_role_only', expected_count = safe_count,
+    format('safe=%s/%s', safe_count, expected_count) from image_rpc_acl_summary
   union all
   select 'confirmation_functions_present', n = 3,
     format('present=%s/3', n) from function_count
   union all
-  select 'slip_storage_path_replaces_image_storage_path',
-    (select n from function_count) = 3
-      and functions_with_slip_field = 2
-      and functions_still_with_face_field = 0,
-    format('slip_field=%s/2; stale_face_field=%s', functions_with_slip_field, functions_still_with_face_field)
-    from slip_field_summary
+  select 'confirm_slip_payment_and_admin_override_enqueue_face',
+    (select n from function_count) = 3 and functions_enqueue_face = 2,
+    format('face_enqueuers=%s/2', functions_enqueue_face) from image_task_summary
   union all
-  select 'admin_override_never_attaches_an_image', admin_override_with_image_lookup = 0,
-    format('admin_override_image_lookups=%s', admin_override_with_image_lookup) from slip_field_summary
+  select 'only_confirm_slip_payment_enqueues_slip',
+    confirm_slip_payment_enqueues_slip = 1 and admin_override_enqueues_slip = 0,
+    format('confirm_slip_payment=%s; admin_override=%s', confirm_slip_payment_enqueues_slip, admin_override_enqueues_slip)
+    from image_task_summary
+  union all
+  select 'approve_manual_review_payment_creates_no_image_rows', approve_creates_image_rows = 0,
+    format('image_row_inserts=%s', approve_creates_image_rows) from image_task_summary
+  union all
+  select 'retired_image_storage_path_field_absent_from_payload',
+    functions_still_with_retired_field = 0,
+    format('functions_with_retired_field=%s', functions_still_with_retired_field) from image_task_summary
   union all
   select 'no_debug_functions_remain', debug_functions = 0,
     format('debug_functions=%s', debug_functions) from debug_summary

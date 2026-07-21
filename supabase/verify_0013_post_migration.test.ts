@@ -21,10 +21,15 @@ for (const check of [
   "payment_slips_bucket_private",
   "required_0013_columns",
   "required_0013_indexes",
-  "payment_slip_images_rls_and_acl",
+  "notification_image_deliveries_unique_per_kind",
+  "payment_slip_tables_rls_and_acl",
+  "image_delivery_rpcs_present_and_hardened",
+  "image_delivery_rpc_acl_service_role_only",
   "confirmation_functions_present",
-  "slip_storage_path_replaces_image_storage_path",
-  "admin_override_never_attaches_an_image",
+  "confirm_slip_payment_and_admin_override_enqueue_face",
+  "only_confirm_slip_payment_enqueues_slip",
+  "approve_manual_review_payment_creates_no_image_rows",
+  "retired_image_storage_path_field_absent_from_payload",
   "no_debug_functions_remain",
 ]) {
   assert.match(sql, new RegExp(`['"]${check}['"]`), `missing postflight check: ${check}`);
@@ -32,7 +37,11 @@ for (const check of [
 
 assert.match(sql, /payment-slips/, "must check the payment-slips bucket");
 assert.match(sql, /payment_slip_images/, "must check the payment_slip_images table");
-assert.match(sql, /slip_storage_path/, "must check for the slip_storage_path payload field");
-assert.match(sql, /image_storage_path/, "must check that the stale image_storage_path field is gone from all three functions");
+assert.match(sql, /payment_slip_evidence_failures/, "must check the payment_slip_evidence_failures table");
+assert.match(sql, /notification_image_deliveries/, "must check the notification_image_deliveries table");
+assert.match(sql, /claim_notification_image_deliveries/, "must check the image claim RPC");
+assert.match(sql, /complete_notification_image_delivery/, "must check the image completion RPC");
+assert.match(sql, /search_path=public, pg_temp/, "image delivery RPCs must be search_path-pinned SECURITY DEFINER");
+assert.match(sql, /image_storage_path/, "must check that the retired image_storage_path field is gone from all three functions");
 
 console.log("0013 post-migration verifier static checks passed");

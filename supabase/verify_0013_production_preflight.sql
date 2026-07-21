@@ -18,7 +18,7 @@
 -- call — the same enforcement mechanism 0012's provenance defect fix added.
 with
 source_provenance_facts as (
-  select '60d1f61584951b01a4aa54639a4a869793333880'::text as migration_blob
+  select 'e9ddc7af68ad203cec73562073fd878e224008b4'::text as migration_blob
 ),
 required_0012_functions(signature) as (
   values
@@ -59,9 +59,16 @@ required_columns_present as (
 migration_0013_object_collisions as (
   select
     (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
-       where n.nspname = 'public' and c.relname = 'payment_slip_images')
+       where n.nspname = 'public'
+         and c.relname in (
+           'payment_slip_images', 'payment_slip_evidence_failures', 'notification_image_deliveries'
+         ))
     +
     (select count(*) from storage.buckets b where b.id = 'payment-slips')
+    +
+    (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and p.proname in ('claim_notification_image_deliveries', 'complete_notification_image_delivery'))
     as count
 ),
 face_image_field_still_present as (
@@ -77,7 +84,7 @@ pgcrypto_available as (
 ),
 checks as (
   select 'source_provenance'::text as check_name,
-    migration_blob = '60d1f61584951b01a4aa54639a4a869793333880' as pass,
+    migration_blob = 'e9ddc7af68ad203cec73562073fd878e224008b4' as pass,
     jsonb_build_object('migration_blob', migration_blob) as evidence
   from source_provenance_facts
   union all

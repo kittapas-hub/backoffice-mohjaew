@@ -28,12 +28,6 @@ export type ClaimedRow = {
   idempotency_key: string;
   attempt_count: number;
   line_retry_key: string;
-  // Stable per-row key for the image push, distinct from line_retry_key
-  // (0012_booking_confirmed_notification.sql). Never regenerated per
-  // attempt — reused on every retry so a crash after LINE accepts the image
-  // but before completion commits can never resend a distinct, undeduped
-  // image on the next claim.
-  image_retry_key: string;
 };
 
 // Renders strictly from the fields process_payment_paid_event actually
@@ -115,6 +109,8 @@ const CONFIRMED_HEADLINE: Record<string, string> = {
 // fields. This is the sole team notification for a successful confirmation:
 // the payment-verified paths no longer also enqueue a separate
 // payment_received row (see the migration's 2026-07-20 hardening note).
+// Image attachment (face/slip) is not part of this text at all — see
+// runImageDeliveryWorker below (0013_payment_slip_notification_image.sql).
 export function renderBookingConfirmedMessage(row: ClaimedRow, appUrl?: string): string {
   const p = row.payload;
   const method = field(p, "confirmation_method");
@@ -149,28 +145,11 @@ export function renderMessage(row: ClaimedRow, appUrl?: string): string {
   return renderPaymentReceivedMessage(row);
 }
 
-// slip_storage_path (0013_payment_slip_notification_image.sql): the actual
-// uploaded payment-slip image, never the customer's face photo. Never
-// present for admin_override (guarded explicitly here too, as defense in
-// depth — that path has no verified payment and must never attach or imply
-// one, even if a future payload change accidentally carried the field).
-function slipStoragePath(row: ClaimedRow): string | null {
-  if (row.payload?.confirmation_method === "admin_override") return null;
-  const v = row.payload?.slip_storage_path;
-  return typeof v === "string" && v.length > 0 ? v : null;
-}
-
 export type RpcResult = { data: unknown; error: { message: string } | null };
 
 export type Deps = {
   db: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<RpcResult> };
   sendPush: (to: string, text: string, retryKey: string) => Promise<PushResult>;
-  // Both optional: only rows with a slip_storage_path in their payload
-  // (booking_confirmed payment-verified paths, slip_manual_review) ever use
-  // these. Omitting them just means no image is attempted — the text
-  // summary is unaffected either way.
-  sendImage?: (to: string, imageUrl: string, retryKey: string) => Promise<PushResult>;
-  signSlipUrl?: (storagePath: string) => Promise<string | null>;
   // Optional: absolute app URL used to build the "Backoffice: ..." link in
   // booking_confirmed/slip_manual_review messages. Omitted (or falsy) means
   // that line is left out of the message entirely — never a broken relative
@@ -222,25 +201,10 @@ async function completeDelivery(
   return "fence_lost";
 }
 
-// Signs and sends the payment-slip image for a confirmed/manual-review
-// booking. Swallows every failure (signing error, send error, or a
-// retryable/permanent push rejection) behind a single fixed log literal —
-// never the storage path, signed URL, or group id — since image delivery is
-// best-effort and must never affect the row's retry/dead outcome.
-async function sendImageBestEffort(deps: Deps, row: ClaimedRow): Promise<void> {
-  if (!deps.signSlipUrl || !deps.sendImage) return;
-  const path = slipStoragePath(row);
-  if (!path) return;
-  try {
-    const url = await deps.signSlipUrl(path);
-    if (!url) return;
-    const result = await deps.sendImage(deps.groupId, url, row.image_retry_key);
-    if (!result.ok) console.error("notification_image_send_failed");
-  } catch {
-    console.error("notification_image_send_failed");
-  }
-}
-
+// Sends the text summary only. Image delivery (face/slip) is entirely
+// separate — see runImageDeliveryWorker below — so an image failure can
+// never resend this text, and this text's own failure/retry never touches
+// any image row.
 export async function runDeliveryWorker(deps: Deps): Promise<WorkerOutcome> {
   const workerId = crypto.randomUUID();
   const startedAt = deps.now();
@@ -280,13 +244,6 @@ export async function runDeliveryWorker(deps: Deps): Promise<WorkerOutcome> {
       const outcome: CompletionOutcome = push.ok ? "sent" : push.retryable ? "retry" : "dead";
       const errorCode = push.ok ? undefined : push.error;
 
-      // Best-effort image, only once the text summary is confirmed sent.
-      // Never affects outcome/retry — a missing or failed image must never
-      // cause the text summary to be resent.
-      if (push.ok) {
-        await sendImageBestEffort(deps, row);
-      }
-
       const status = await completeDelivery(deps, workerId, row.id, outcome, errorCode);
 
       if (status === "failed") {
@@ -295,6 +252,143 @@ export async function runDeliveryWorker(deps: Deps): Promise<WorkerOutcome> {
       }
       if (status === "fence_lost") {
         console.error("notification_completion_fence_lost");
+      } else if (outcome === "sent") {
+        result.sent++;
+      } else if (outcome === "retry") {
+        result.retried++;
+      } else {
+        result.dead++;
+      }
+
+      if (deps.now() - startedAt >= deps.timeBudgetMs) return { ok: true, ...result };
+    }
+  }
+
+  return { ok: true, ...result };
+}
+
+// ===========================================================================
+// Image delivery worker (0013_payment_slip_notification_image.sql).
+//
+// Entirely independent of runDeliveryWorker above: claims from
+// notification_image_deliveries via claim_notification_image_deliveries,
+// which has its own status/lease/backoff lifecycle unrelated to the parent
+// notification_deliveries row (which may already be 'sent'). One row per
+// (notification, image kind) — 'face' or 'payment_slip' — each with its own
+// stable line_retry_key, so a face failure can never block or resend the
+// slip and vice versa, and a future cron tick retries only whichever image
+// is still outstanding.
+// ===========================================================================
+
+export type ImageKind = "face" | "payment_slip";
+
+export type ImageClaimedRow = {
+  id: string;
+  notification_delivery_id: string;
+  image_kind: ImageKind;
+  storage_path: string;
+  line_retry_key: string;
+  attempt_count: number;
+};
+
+export type ImageDeps = {
+  db: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<RpcResult> };
+  sendImage: (to: string, imageUrl: string, retryKey: string) => Promise<PushResult>;
+  signFaceUrl: (storagePath: string) => Promise<string | null>;
+  signSlipUrl: (storagePath: string) => Promise<string | null>;
+  groupId: string;
+  now: () => number;
+  batch: number;
+  timeBudgetMs: number;
+};
+
+export type ImageDeliveryWorkerResult = { processed: number; sent: number; retried: number; dead: number };
+export type ImageWorkerFailureCode = "claim_failed" | "completion_failed";
+export type ImageWorkerOutcome =
+  | ({ ok: true } & ImageDeliveryWorkerResult)
+  | { ok: false; code: ImageWorkerFailureCode };
+
+async function completeImageDelivery(
+  deps: ImageDeps,
+  workerId: string,
+  rowId: string,
+  outcome: CompletionOutcome,
+  errorCode?: string,
+): Promise<CompletionStatus> {
+  let res: RpcResult;
+  try {
+    res = await deps.db.rpc("complete_notification_image_delivery", {
+      p_id: rowId,
+      p_worker_id: workerId,
+      p_outcome: outcome,
+      ...(errorCode ? { p_error: errorCode } : {}),
+    });
+  } catch {
+    return "failed";
+  }
+  if (res.error) return "failed";
+  if (res.data === true) return "completed";
+  return "fence_lost";
+}
+
+export async function runImageDeliveryWorker(deps: ImageDeps): Promise<ImageWorkerOutcome> {
+  const workerId = crypto.randomUUID();
+  const startedAt = deps.now();
+  const result: ImageDeliveryWorkerResult = { processed: 0, sent: 0, retried: 0, dead: 0 };
+
+  while (deps.now() - startedAt < deps.timeBudgetMs) {
+    let claimResult: RpcResult;
+    try {
+      claimResult = await deps.db.rpc("claim_notification_image_deliveries", {
+        p_worker_id: workerId,
+        p_batch: deps.batch,
+      });
+    } catch {
+      console.error("notification_image_claim_failed");
+      return { ok: false, code: "claim_failed" };
+    }
+    if (claimResult.error) {
+      console.error("notification_image_claim_failed");
+      return { ok: false, code: "claim_failed" };
+    }
+
+    const rows = (claimResult.data ?? []) as ImageClaimedRow[];
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      result.processed++;
+      const sign = row.image_kind === "face" ? deps.signFaceUrl : deps.signSlipUrl;
+
+      let outcome: CompletionOutcome;
+      let errorCode: string | undefined;
+      try {
+        const url = await sign(row.storage_path);
+        if (!url) {
+          outcome = "retry";
+          errorCode = "sign_failed";
+        } else {
+          const push = await deps.sendImage(deps.groupId, url, row.line_retry_key);
+          if (push.ok) {
+            outcome = "sent";
+            errorCode = undefined;
+          } else {
+            outcome = push.retryable ? "retry" : "dead";
+            errorCode = push.error;
+          }
+        }
+      } catch {
+        outcome = "retry";
+        errorCode = "image_send_unexpected_error";
+      }
+
+      const status = await completeImageDelivery(deps, workerId, row.id, outcome, errorCode);
+
+      if (status === "failed") {
+        console.error("notification_image_completion_failed");
+        return { ok: false, code: "completion_failed" };
+      }
+      if (status === "fence_lost") {
+        console.error("notification_image_completion_fence_lost");
       } else if (outcome === "sent") {
         result.sent++;
       } else if (outcome === "retry") {

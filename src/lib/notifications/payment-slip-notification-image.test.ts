@@ -1,4 +1,4 @@
-// Self-check for the payment-slip evidence image feature
+// Self-check for the dual face+slip payment-evidence image feature
 // (0013_payment_slip_notification_image.sql).
 // Run: node --experimental-strip-types src/lib/notifications/payment-slip-notification-image.test.ts
 //
@@ -41,7 +41,8 @@ assert.match(migration, /insert into storage\.buckets \(id, name, public\)\s*\nv
 assert.doesNotMatch(migration, /'payment-slips'[^;]*true/s, "payment-slips bucket must never be set public");
 
 // ===========================================================================
-// payment_slip_images: append-only evidence table, same security model as
+// payment_slip_images / payment_slip_evidence_failures: append-only
+// evidence + failure-visibility tables, same security model as
 // payment_slip_verifications/payment_transactions (0011) — RLS enabled, no
 // anon/authenticated grants, service_role only.
 // ===========================================================================
@@ -49,20 +50,67 @@ assert.match(migration, /create table if not exists public\.payment_slip_images/
 for (const col of ["payment_order_id", "booking_id", "storage_path", "mime_type", "created_at"]) {
   assert.ok(migration.includes(col), `payment_slip_images must declare column ${col}`);
 }
-assert.match(migration, /alter table public\.payment_slip_images enable row level security/);
-assert.match(migration, /revoke all on table public\.payment_slip_images from anon, authenticated/);
-assert.match(migration, /grant all on table public\.payment_slip_images to service_role/);
+assert.match(migration, /create table if not exists public\.payment_slip_evidence_failures/);
+assert.match(migration, /stage\s+text\s+not null\s+check \(stage in \('upload', 'record'\)\)/);
+for (const table of ["payment_slip_images", "payment_slip_evidence_failures", "notification_image_deliveries"]) {
+  assert.match(migration, new RegExp(`alter table public\\.${table} enable row level security`));
+  assert.match(migration, new RegExp(`revoke all on table public\\.${table} from anon, authenticated`));
+  assert.match(migration, new RegExp(`grant all on table public\\.${table} to service_role`));
+}
+
+// ===========================================================================
+// notification_image_deliveries: one row per (notification, image kind),
+// unique per pair, its own status/lease/backoff shape, independent of the
+// parent notification_deliveries row's lifecycle.
+// ===========================================================================
+assert.match(migration, /create table if not exists public\.notification_image_deliveries/);
+assert.match(migration, /image_kind\s+text\s+not null\s+check \(image_kind in \('face', 'payment_slip'\)\)/);
+assert.match(migration, /unique \(notification_delivery_id, image_kind\)/);
+for (const col of ["status", "attempt_count", "next_retry_at", "sent_at", "last_error", "line_retry_key"]) {
+  assert.ok(migration.includes(col), `notification_image_deliveries must declare column ${col}`);
+}
+
+// ===========================================================================
+// claim_notification_image_deliveries / complete_notification_image_delivery
+// mirror claim_team_notification_deliveries / complete_notification_delivery
+// (0007): SECURITY DEFINER, search_path pinned, service_role only, and the
+// same fixed backoff schedule.
+// ===========================================================================
+for (const [fn, args] of [
+  ["claim_notification_image_deliveries", "text, int"],
+  ["complete_notification_image_delivery", "uuid, text, text, text"],
+] as const) {
+  assert.match(migration, new RegExp(`create function public\\.${fn}\\(`), `must create ${fn}`);
+  assert.match(
+    migration,
+    new RegExp(`revoke all on function public\\.${fn}\\(${args.replace(/[.()]/g, "\\$&")}\\) from public, anon, authenticated`),
+    `must revoke execute on ${fn}`,
+  );
+  assert.match(
+    migration,
+    new RegExp(`grant execute on function public\\.${fn}\\(${args.replace(/[.()]/g, "\\$&")}\\) to service_role`),
+    `must grant execute on ${fn} to service_role`,
+  );
+}
+function imageRpcBody(name: string): string {
+  const start = migration.indexOf(`function public.${name}`);
+  const end = migration.indexOf("$$;", start) + 3;
+  return migration.slice(start, end);
+}
+assert.match(imageRpcBody("claim_notification_image_deliveries"), /security definer\s*\nset search_path = public, pg_temp/);
+assert.match(imageRpcBody("complete_notification_image_delivery"), /security definer\s*\nset search_path = public, pg_temp/);
+// Same fixed backoff schedule as complete_notification_delivery (0007).
+assert.match(imageRpcBody("complete_notification_image_delivery"), /when 1 then 1[\s\S]*when 2 then 5[\s\S]*when 3 then 15[\s\S]*when 4 then 60[\s\S]*when 5 then 360/);
+assert.match(imageRpcBody("complete_notification_image_delivery"), /v_attempt >= 6/);
 
 // ===========================================================================
 // Signed URLs are never generated or stored here — only the private storage
-// path, exactly like 0012's face-image handling.
+// path.
 // ===========================================================================
 assert.doesNotMatch(migration, /createSignedUrl|signedUrl/i, "migration must never generate or store a signed URL");
 
 // ===========================================================================
-// Exactly three functions are replaced, matching 0012's three confirmation
-// paths — same signatures, no DROP + CREATE needed (payload gains a jsonb
-// key, not a new returned column).
+// Exactly three confirmation functions are replaced — same signatures.
 // ===========================================================================
 for (const [fnSig, revokeGrantArgs] of [
   ["public.confirm_slip_payment(", "uuid, text, text, timestamptz, int, text, text, jsonb"],
@@ -98,38 +146,56 @@ const approveBody = functionBody("approve_manual_review_payment");
 const transitionBody = functionBody("transition_slot_booking");
 
 // ===========================================================================
-// slip_storage_path replaces image_storage_path for the two payment-verified
-// RPCs — never reusing the ambiguous face-image field name.
+// The jsonb payload no longer carries any image-path field at all (neither
+// the retired 'image_storage_path' nor a new one) — image delivery is
+// entirely driven by notification_image_deliveries now.
 // ===========================================================================
-for (const body of [confirmSlipBody, approveBody]) {
-  assert.match(body, /select psi\.storage_path into v_slip_path\s*\n\s*from public\.payment_slip_images psi/, "must look up the slip evidence from payment_slip_images");
-  assert.match(body, /'slip_storage_path', v_slip_path/, "must carry slip_storage_path (not image_storage_path) in the payload");
-  assert.doesNotMatch(body, /image_storage_path|booking_images/, "must not reference the old face-image field or table");
+for (const body of [confirmSlipBody, approveBody, transitionBody]) {
+  assert.doesNotMatch(body, /image_storage_path|slip_storage_path|face_storage_path/, "the jsonb payload must never carry an image-path field");
 }
 
-// confirm_slip_payment must key the lookup by the current payment order —
-// both the manual_review branch and the success branch.
-const slipPathLookups = confirmSlipBody.match(/where psi\.payment_order_id = p_payment_order_id/g) ?? [];
-assert.equal(slipPathLookups.length, 2, "confirm_slip_payment must look up slip evidence in both its manual_review and success branches");
-
-// approve_manual_review_payment keys the lookup by the order being approved.
-assert.match(approveBody, /where psi\.payment_order_id = v_order\.id/, "approve_manual_review_payment must look up slip evidence for the order being approved");
+// ===========================================================================
+// confirm_slip_payment: BOTH branches look up face (booking_images) and
+// slip (payment_slip_images) evidence and conditionally insert BOTH kinds,
+// gated on the parent insert actually returning a fresh row (never
+// duplicating tasks on a conflict/race).
+// ===========================================================================
+const faceLookups = confirmSlipBody.match(/select bi\.storage_path into v_face_path\s*\n\s*from public\.booking_images bi/g) ?? [];
+assert.equal(faceLookups.length, 2, "confirm_slip_payment must look up the face image in both its manual_review and success branches");
+const slipLookups = confirmSlipBody.match(/select psi\.storage_path into v_slip_path\s*\n\s*from public\.payment_slip_images psi/g) ?? [];
+assert.equal(slipLookups.length, 2, "confirm_slip_payment must look up the slip image in both its manual_review and success branches");
+const faceInserts = confirmSlipBody.match(/values \(v_notification_id, 'face', v_face_path\)/g) ?? [];
+assert.equal(faceInserts.length, 2, "confirm_slip_payment must conditionally enqueue a face image task in both branches");
+const slipInserts = confirmSlipBody.match(/values \(v_notification_id, 'payment_slip', v_slip_path\)/g) ?? [];
+assert.equal(slipInserts.length, 2, "confirm_slip_payment must conditionally enqueue a slip image task in both branches");
+assert.match(confirmSlipBody, /if v_notification_id is not null then/, "image tasks must be gated on the notification row actually being newly created");
+assert.match(confirmSlipBody, /returning id into v_notification_id/, "must capture the notification_deliveries id via RETURNING");
 
 // The slip_manual_review notification (inside confirm_slip_payment) must
-// also carry slip_storage_path — the manual-review alert gets the same
-// evidence image as a successful confirmation.
+// also enqueue both image kinds — the manual-review alert gets the same
+// evidence as a successful confirmation.
 const manualReviewBranch = confirmSlipBody.slice(
   confirmSlipBody.indexOf("if v_reason is not null then"),
   confirmSlipBody.indexOf("return jsonb_build_object('result','manual_review','reason',v_reason);") + 60,
 );
-assert.match(manualReviewBranch, /'slip_storage_path',v_slip_path/, "slip_manual_review payload must include slip_storage_path");
+assert.match(manualReviewBranch, /'face', v_face_path/, "slip_manual_review must enqueue a face image task");
+assert.match(manualReviewBranch, /'payment_slip', v_slip_path/, "slip_manual_review must enqueue a slip image task");
 
 // ===========================================================================
-// transition_slot_booking (admin override): no image lookup at all — no
-// face, no slip, and no claim that a payment was received.
+// approve_manual_review_payment: creates NO new image-delivery rows — the
+// slip_manual_review notification already owns them.
 // ===========================================================================
-assert.doesNotMatch(transitionBody, /image_storage_path|slip_storage_path|booking_images|payment_slip_images/, "admin override must never attach any image or reference an image table");
-assert.doesNotMatch(transitionBody, /v_image_path/, "admin override's now-unused face-image variable must be removed, not left dangling");
+assert.doesNotMatch(approveBody, /notification_image_deliveries/, "approve_manual_review_payment must never insert into notification_image_deliveries");
+assert.doesNotMatch(approveBody, /v_face_path|v_slip_path/, "approve_manual_review_payment must not need any image lookups");
+
+// ===========================================================================
+// transition_slot_booking (admin override): face image only — never a slip,
+// never implies a payment was received.
+// ===========================================================================
+assert.match(transitionBody, /select bi\.storage_path into v_face_path/, "admin override must still attach the face image");
+assert.match(transitionBody, /'face', v_face_path/, "admin override must enqueue a face image task");
+assert.doesNotMatch(transitionBody, /payment_slip_images|'payment_slip'/, "admin override must never reference slip evidence or enqueue a slip task");
+assert.doesNotMatch(transitionBody, /expected_amount_satang|received_amount_satang/, "admin override must never include amount fields — it has no verified payment");
 
 // ===========================================================================
 // Atomicity: one BEGIN/COMMIT, same convention as every other migration.
@@ -145,8 +211,7 @@ assert.doesNotMatch(transitionBody, /v_image_path/, "admin override's now-unused
 
 // ===========================================================================
 // The TS upload route stores evidence AFTER validation/verification/policy
-// checks pass, and never before — and the file's own header no longer
-// claims the image is never stored.
+// checks pass, never before — and it never claims the slip goes unstored.
 // ===========================================================================
 const routeSrc = readSrc("src/app/api/pay/[token]/slip/route.ts");
 assert.doesNotMatch(routeSrc, /NEVER stored or logged/, "route header must no longer claim the slip is never stored");
@@ -156,6 +221,19 @@ assert.ok(
   "evidence must be stored before calling confirmSlipPayment",
 );
 assert.match(routeSrc, /\.from\("payment-slips"\)/, "route must upload to the payment-slips bucket");
-assert.match(routeSrc, /\.remove\(\[path\]\)/, "route must best-effort remove the uploaded object if the DB record fails");
+
+// ===========================================================================
+// Evidence-storage hardening: exceptions never escape (try/catch around
+// every storage/DB call), a failed evidence write is durably recorded, and
+// cleanup never deletes an object still referenced by an earlier attempt.
+// ===========================================================================
+const storeFnSrc = routeSrc.slice(routeSrc.indexOf("async function storeSlipEvidence"), routeSrc.indexOf("async function cleanupUnreferencedUpload"));
+assert.match(storeFnSrc, /try\s*\{[\s\S]*?\.upload\(/, "the upload call must be wrapped in try/catch");
+assert.match(storeFnSrc, /try\s*\{[\s\S]*?payment_slip_images["'`]?\)[\s\S]*?\.insert\(/, "the DB record call must be wrapped in try/catch");
+assert.match(routeSrc, /recordEvidenceFailure\(/, "a failed evidence write must be durably recorded");
+assert.match(routeSrc, /payment_slip_evidence_failures/, "failures must be recorded in payment_slip_evidence_failures");
+const cleanupFnSrc = routeSrc.slice(routeSrc.indexOf("async function cleanupUnreferencedUpload"), routeSrc.indexOf("async function recordEvidenceFailure"));
+assert.match(cleanupFnSrc, /count && count > 0\) return/, "cleanup must never remove an object still referenced by an earlier attempt's row");
+assert.match(cleanupFnSrc, /\.remove\(\[path\]\)/, "cleanup must only remove the object when nothing references it");
 
 console.log("payment-slip-notification-image self-check passed");

@@ -1,4 +1,5 @@
-// Self-check for the team-notification delivery worker (Phase 1A / Task 3).
+// Self-check for the team-notification delivery workers (Phase 1A / Task 3,
+// extended by 0013_payment_slip_notification_image.sql for images).
 // Run: node --experimental-strip-types src/lib/notifications/delivery-worker.test.ts
 //
 // delivery-worker.ts is dependency-injected and free of Next.js/env imports,
@@ -14,11 +15,13 @@ import { dirname, join } from "node:path";
 import type { PushResult } from "../line.ts";
 import {
   runDeliveryWorker,
+  runImageDeliveryWorker,
   renderPaymentReceivedMessage,
   renderBookingConfirmedMessage,
   renderSlipManualReviewMessage,
   EVENT_TYPES,
   type ClaimedRow,
+  type ImageClaimedRow,
 } from "./delivery-worker.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -67,6 +70,14 @@ assert.match(
   routeSrc,
   /if \(!result\.ok\)\s*\{\s*\n\s*return NextResponse\.json\(\{ error: "worker_failed" \}, \{ status: 500 \}\);/,
   "route must return a generic 500 when the worker reports a claim/completion failure",
+);
+assert.match(routeSrc, /runImageDeliveryWorker\(/, "route must also run the image delivery worker");
+assert.match(routeSrc, /error: "image_worker_failed"/, "route must surface an image-worker claim/completion failure distinctly");
+// Image delivery must run regardless of the text loop's own claimed count —
+// it is entirely independent (see this file's runImageDeliveryWorker tests).
+assert.ok(
+  routeSrc.indexOf("runDeliveryWorker(") < routeSrc.indexOf("runImageDeliveryWorker("),
+  "text delivery must be attempted before image delivery in the route (ordering only, not a dependency)",
 );
 
 // No raw payload, recipient group id, or token in any log/error in the route.
@@ -134,7 +145,6 @@ function makeRow(id: string): ClaimedRow {
     idempotency_key: `pay:received:team:order-${id}`,
     attempt_count: 0,
     line_retry_key: "11111111-1111-4111-8111-111111111111",
-    image_retry_key: "11111111-2222-4222-8222-111111111111",
   };
 }
 
@@ -151,10 +161,11 @@ function makeRow(id: string): ClaimedRow {
 
 // makeConfirmedRow: mirrors the exact payload shape written by
 // 0012_booking_confirmed_notification.sql / 0013_payment_slip_notification_image.sql
-// — no invented fields.
+// — no invented fields. The payload never carries an image-path field at
+// all (0013): image delivery is driven entirely by notification_image_deliveries.
 function makeConfirmedRow(
   id: string,
-  opts: { imagePath?: string | null; confirmationMethod?: string; amounts?: boolean } = {},
+  opts: { confirmationMethod?: string; amounts?: boolean } = {},
 ): ClaimedRow {
   const { confirmationMethod = "easyslip_auto", amounts = true } = opts;
   return {
@@ -176,23 +187,12 @@ function makeConfirmedRow(
       confirmation_method: confirmationMethod,
       ...(amounts ? { expected_amount_satang: 99900, received_amount_satang: 99900 } : {}),
       updated_at: "2026-07-14T10:00:00Z",
-      slip_storage_path: "imagePath" in opts ? opts.imagePath : `booking-${id}/slip.jpg`,
     },
     idempotency_key: `booking:confirmed:team:booking-${id}`,
     attempt_count: 0,
     line_retry_key: "22222222-2222-4222-8222-222222222222",
-    // Deliberately a different value from line_retry_key above — text and
-    // image must never share a retry key.
-    image_retry_key: "33333333-3333-4333-8333-333333333333",
   };
 }
-
-// Sanity check on the fixture itself: text and image retry keys must differ.
-assert.notEqual(
-  makeConfirmedRow("sanity").line_retry_key,
-  makeConfirmedRow("sanity").image_retry_key,
-  "line_retry_key and image_retry_key must be distinct values",
-);
 
 // ===========================================================================
 // Wording must depend on the confirmation path. EasySlip automatic success
@@ -251,7 +251,7 @@ assert.notEqual(
 // rather than throwing or printing "undefined", and must omit amount/
 // Backoffice lines entirely when those fields are absent.
 {
-  const row = makeConfirmedRow("missing", { imagePath: null });
+  const row = makeConfirmedRow("missing");
   row.payload = { booking_id: row.booking_id };
   const text = renderBookingConfirmedMessage(row);
   assert.doesNotMatch(text, /undefined/);
@@ -295,7 +295,6 @@ function makeManualReviewRow(id: string): ClaimedRow {
     idempotency_key: `slip:review:${id}`,
     attempt_count: 0,
     line_retry_key: "44444444-4444-4444-8444-444444444444",
-    image_retry_key: "55555555-5555-4555-8555-555555555555",
   };
 }
 
@@ -629,304 +628,6 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
 }
 
 // ===========================================================================
-// runDeliveryWorker: booking_confirmed row with a slip_storage_path sends
-// text (with its stable line_retry_key) THEN signs + sends the image (with
-// its OWN stable image_retry_key — never the text's key), both addressed to
-// the same groupId (never a customer/different recipient).
-// ===========================================================================
-{
-  const calls: FakeCall[] = [];
-  let claimCount = 0;
-  const pushedTo: string[] = [];
-  const pushedRetryKeys: string[] = [];
-  const signedPaths: string[] = [];
-  const imageSentTo: { to: string; url: string; retryKey: string }[] = [];
-  const db = {
-    rpc: async (fn: string, args: Record<string, unknown>) => {
-      calls.push({ fn, args });
-      if (fn === "claim_team_notification_deliveries") {
-        claimCount++;
-        if (claimCount === 1) return { data: [makeConfirmedRow("1")], error: null };
-        return { data: [], error: null };
-      }
-      return { data: true, error: null };
-    },
-  };
-  const result = await runDeliveryWorker({
-    db,
-    sendPush: async (to, text, retryKey) => {
-      pushedTo.push(to);
-      pushedRetryKeys.push(retryKey);
-      assert.match(text, /ได้รับชำระเงินและยืนยันการจองแล้ว/);
-      return { ok: true };
-    },
-    signSlipUrl: async (path) => {
-      signedPaths.push(path);
-      return `https://signed.example/${path}`;
-    },
-    sendImage: async (to, url, retryKey) => {
-      imageSentTo.push({ to, url, retryKey });
-      return { ok: true };
-    },
-    groupId: "correct-group-id",
-    now: () => 0,
-    batch: 20,
-    timeBudgetMs: 50_000,
-  });
-  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
-  assert.deepEqual(pushedTo, ["correct-group-id"]);
-  assert.deepEqual(pushedRetryKeys, ["22222222-2222-4222-8222-222222222222"]);
-  assert.deepEqual(signedPaths, ["booking-1/slip.jpg"]);
-  assert.deepEqual(imageSentTo, [
-    {
-      to: "correct-group-id",
-      url: "https://signed.example/booking-1/slip.jpg",
-      retryKey: "33333333-3333-4333-8333-333333333333",
-    },
-  ]);
-  assert.notEqual(pushedRetryKeys[0], imageSentTo[0].retryKey, "text and image must use different retry keys");
-
-  const completion = calls.find((c) => c.fn === "complete_notification_delivery");
-  assert.equal(completion?.args.p_outcome, "sent");
-}
-
-// ===========================================================================
-// runDeliveryWorker: the image retry key is STABLE across separate claims of
-// the same row (e.g. a stale-lease reclaim after a crash between LINE
-// accepting the image and complete_notification_delivery committing) — it
-// is never regenerated per attempt, since the row's image_retry_key column
-// is fixed at insert time and simply passed through on every claim.
-// ===========================================================================
-{
-  const seenRetryKeys: string[] = [];
-  let claimCount = 0;
-  const db = {
-    rpc: async (fn: string) => {
-      if (fn === "claim_team_notification_deliveries") {
-        claimCount++;
-        // Simulate two separate claims of the identical row (same
-        // image_retry_key each time, as the DB column would provide).
-        if (claimCount <= 2) return { data: [makeConfirmedRow("stable")], error: null };
-        return { data: [], error: null };
-      }
-      return { data: true, error: null };
-    },
-  };
-  await runDeliveryWorker({
-    db,
-    sendPush: async () => ({ ok: true }),
-    signSlipUrl: async (path) => `https://signed.example/${path}`,
-    sendImage: async (_to, _url, retryKey) => {
-      seenRetryKeys.push(retryKey);
-      return { ok: true };
-    },
-    groupId: "group",
-    now: () => 0,
-    batch: 20,
-    timeBudgetMs: 50_000,
-  });
-  assert.deepEqual(seenRetryKeys, [
-    "33333333-3333-4333-8333-333333333333",
-    "33333333-3333-4333-8333-333333333333",
-  ]);
-}
-
-// ===========================================================================
-// runDeliveryWorker: booking_confirmed row with no slip_storage_path sends
-// text only — signSlipUrl/sendImage are never called.
-// ===========================================================================
-{
-  let claimCount = 0;
-  let signCalled = false;
-  let imageCalled = false;
-  const db = {
-    rpc: async (fn: string) => {
-      if (fn === "claim_team_notification_deliveries") {
-        claimCount++;
-        if (claimCount === 1) return { data: [makeConfirmedRow("1", { imagePath: null })], error: null };
-        return { data: [], error: null };
-      }
-      return { data: true, error: null };
-    },
-  };
-  const result = await runDeliveryWorker({
-    db,
-    sendPush: async () => ({ ok: true }),
-    signSlipUrl: async (path) => {
-      signCalled = true;
-      return `https://signed.example/${path}`;
-    },
-    sendImage: async () => {
-      imageCalled = true;
-      return { ok: true };
-    },
-    groupId: "group",
-    now: () => 0,
-    batch: 20,
-    timeBudgetMs: 50_000,
-  });
-  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
-  assert.equal(signCalled, false);
-  assert.equal(imageCalled, false);
-}
-
-// ===========================================================================
-// runDeliveryWorker: admin_override must never attempt an image send, even
-// if a payload somehow carried a slip_storage_path (defense in depth — this
-// path has no verified payment and must never attach or imply one).
-// ===========================================================================
-{
-  let claimCount = 0;
-  let signCalled = false;
-  let imageCalled = false;
-  const db = {
-    rpc: async (fn: string) => {
-      if (fn === "claim_team_notification_deliveries") {
-        claimCount++;
-        if (claimCount === 1) {
-          const row = makeConfirmedRow("override", { confirmationMethod: "admin_override", amounts: false });
-          row.payload = { ...row.payload, slip_storage_path: "booking-override/slip.jpg" };
-          return { data: [row], error: null };
-        }
-        return { data: [], error: null };
-      }
-      return { data: true, error: null };
-    },
-  };
-  const result = await runDeliveryWorker({
-    db,
-    sendPush: async () => ({ ok: true }),
-    signSlipUrl: async (path) => {
-      signCalled = true;
-      return `https://signed.example/${path}`;
-    },
-    sendImage: async () => {
-      imageCalled = true;
-      return { ok: true };
-    },
-    groupId: "group",
-    now: () => 0,
-    batch: 20,
-    timeBudgetMs: 50_000,
-  });
-  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
-  assert.equal(signCalled, false, "admin_override must never sign a slip URL even if the payload carries one");
-  assert.equal(imageCalled, false, "admin_override must never send an image");
-}
-
-// ===========================================================================
-// runDeliveryWorker: a slip_manual_review row with a slip_storage_path also
-// sends the slip image after its text — the amount-mismatch/manual-review
-// alert gets the same evidence image as a successful confirmation.
-// ===========================================================================
-{
-  let claimCount = 0;
-  const signedPaths: string[] = [];
-  const imageSentTo: { to: string; url: string; retryKey: string }[] = [];
-  const db = {
-    rpc: async (fn: string) => {
-      if (fn === "claim_team_notification_deliveries") {
-        claimCount++;
-        if (claimCount === 1) {
-          const row = makeManualReviewRow("with-slip");
-          row.payload = { ...row.payload, slip_storage_path: "booking-with-slip/order-with-slip.jpg" };
-          return { data: [row], error: null };
-        }
-        return { data: [], error: null };
-      }
-      return { data: true, error: null };
-    },
-  };
-  const result = await runDeliveryWorker({
-    db,
-    sendPush: async () => ({ ok: true }),
-    signSlipUrl: async (path) => {
-      signedPaths.push(path);
-      return `https://signed.example/${path}`;
-    },
-    sendImage: async (to, url, retryKey) => {
-      imageSentTo.push({ to, url, retryKey });
-      return { ok: true };
-    },
-    groupId: "group",
-    now: () => 0,
-    batch: 20,
-    timeBudgetMs: 50_000,
-  });
-  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
-  assert.deepEqual(signedPaths, ["booking-with-slip/order-with-slip.jpg"]);
-  assert.equal(imageSentTo.length, 1, "slip_manual_review must send the slip image once, after the text");
-  assert.equal(imageSentTo[0].retryKey, "55555555-5555-4555-8555-555555555555");
-}
-
-// ===========================================================================
-// runDeliveryWorker: booking_confirmed row also works with signSlipUrl/
-// sendImage entirely omitted (route always supplies them, but the worker
-// must not crash if it doesn't) — text still sends.
-// ===========================================================================
-{
-  let claimCount = 0;
-  const db = {
-    rpc: async (fn: string) => {
-      if (fn === "claim_team_notification_deliveries") {
-        claimCount++;
-        if (claimCount === 1) return { data: [makeConfirmedRow("1")], error: null };
-        return { data: [], error: null };
-      }
-      return { data: true, error: null };
-    },
-  };
-  const result = await runDeliveryWorker({
-    db,
-    sendPush: async () => ({ ok: true }),
-    groupId: "group",
-    now: () => 0,
-    batch: 20,
-    timeBudgetMs: 50_000,
-  });
-  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
-}
-
-// ===========================================================================
-// runDeliveryWorker: image signing/send failure never affects the row's
-// outcome — text was already sent, so it must be recorded 'sent', not
-// retried, and the failure must be logged behind a single fixed literal
-// (never the storage path, signed URL, or group id).
-// ===========================================================================
-{
-  let claimCount = 0;
-  const db = {
-    rpc: async (fn: string) => {
-      if (fn === "claim_team_notification_deliveries") {
-        claimCount++;
-        if (claimCount === 1) return { data: [makeConfirmedRow("1")], error: null };
-        return { data: [], error: null };
-      }
-      return { data: true, error: null };
-    },
-  };
-  const { result, logs } = await captureConsoleErrors(() =>
-    runDeliveryWorker({
-      db,
-      sendPush: async () => ({ ok: true }),
-      signSlipUrl: async () => {
-        throw new Error("leaked-signing-detail-secret-path");
-      },
-      sendImage: async () => ({ ok: true }),
-      groupId: "group",
-      now: () => 0,
-      batch: 20,
-      timeBudgetMs: 50_000,
-    }),
-  );
-  assert.deepEqual(result, { ok: true, processed: 1, sent: 1, retried: 0, dead: 0 });
-  for (const args of logs) {
-    assert.doesNotMatch(JSON.stringify(args), /leaked-signing-detail-secret-path/);
-  }
-  assert.ok(logs.some((args) => args.length === 1 && args[0] === "notification_image_send_failed"));
-}
-
-// ===========================================================================
 // runDeliveryWorker: a retryable LINE failure on a booking_confirmed row
 // only ever touches notification_deliveries (via complete_notification_delivery)
 // — the worker never issues an RPC against bookings/transition_slot_booking/
@@ -957,6 +658,328 @@ type FakeCall = { fn: string; args: Record<string, unknown> };
   });
   assert.deepEqual(result, { ok: true, processed: 1, sent: 0, retried: 1, dead: 0 });
   assert.ok(calls.every((c) => c.fn === "claim_team_notification_deliveries" || c.fn === "complete_notification_delivery"));
+}
+
+// ===========================================================================
+// runImageDeliveryWorker (0013_payment_slip_notification_image.sql):
+// entirely separate claim/complete RPC pair from the text worker above — an
+// image failure never touches notification_deliveries/complete_notification_delivery,
+// and a text failure never touches notification_image_deliveries.
+// ===========================================================================
+
+function makeImageRow(id: string, kind: "face" | "payment_slip", path: string, retryKey: string): ImageClaimedRow {
+  return {
+    id,
+    notification_delivery_id: `notif-${id}`,
+    image_kind: kind,
+    storage_path: path,
+    line_retry_key: retryKey,
+    attempt_count: 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Claims from claim_notification_image_deliveries only.
+// ---------------------------------------------------------------------------
+{
+  const calls: FakeCall[] = [];
+  const db = {
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      calls.push({ fn, args });
+      return { data: [], error: null };
+    },
+  };
+  const result = await runImageDeliveryWorker({
+    db,
+    sendImage: async () => ({ ok: true }),
+    signFaceUrl: async (p) => `https://signed.example/${p}`,
+    signSlipUrl: async (p) => `https://signed.example/${p}`,
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].fn, "claim_notification_image_deliveries");
+}
+
+// ---------------------------------------------------------------------------
+// A face row and a slip row in the same batch: each is signed with the
+// correct bucket-specific signer, sent to the same groupId with its own
+// stable, distinct retry key, and completed independently.
+// ---------------------------------------------------------------------------
+{
+  const calls: FakeCall[] = [];
+  let claimCount = 0;
+  const signedFacePaths: string[] = [];
+  const signedSlipPaths: string[] = [];
+  const imageSends: { to: string; url: string; retryKey: string }[] = [];
+  const db = {
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      calls.push({ fn, args });
+      if (fn === "claim_notification_image_deliveries") {
+        claimCount++;
+        if (claimCount === 1) {
+          return {
+            data: [
+              makeImageRow("f1", "face", "booking-1/face.jpg", "aaaaaaaa-1111-4111-8111-111111111111"),
+              makeImageRow("s1", "payment_slip", "booking-1/order-1.jpg", "bbbbbbbb-2222-4222-8222-222222222222"),
+            ],
+            error: null,
+          };
+        }
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const result = await runImageDeliveryWorker({
+    db,
+    sendImage: async (to, url, retryKey) => {
+      imageSends.push({ to, url, retryKey });
+      return { ok: true };
+    },
+    signFaceUrl: async (p) => {
+      signedFacePaths.push(p);
+      return `https://signed.example/face/${p}`;
+    },
+    signSlipUrl: async (p) => {
+      signedSlipPaths.push(p);
+      return `https://signed.example/slip/${p}`;
+    },
+    groupId: "correct-group-id",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(result, { ok: true, processed: 2, sent: 2, retried: 0, dead: 0 });
+  assert.deepEqual(signedFacePaths, ["booking-1/face.jpg"]);
+  assert.deepEqual(signedSlipPaths, ["booking-1/order-1.jpg"]);
+  assert.deepEqual(imageSends, [
+    { to: "correct-group-id", url: "https://signed.example/face/booking-1/face.jpg", retryKey: "aaaaaaaa-1111-4111-8111-111111111111" },
+    { to: "correct-group-id", url: "https://signed.example/slip/booking-1/order-1.jpg", retryKey: "bbbbbbbb-2222-4222-8222-222222222222" },
+  ]);
+  assert.notEqual(imageSends[0].retryKey, imageSends[1].retryKey, "face and slip must use distinct, stable retry keys");
+
+  const completions = calls.filter((c) => c.fn === "complete_notification_image_delivery");
+  assert.equal(completions.length, 2);
+  assert.ok(completions.every((c) => c.args.p_outcome === "sent"));
+}
+
+// ---------------------------------------------------------------------------
+// A face failure must not block or resend the slip, and vice versa: each row
+// in a batch is completed independently, one retryable failure does not
+// affect the other row's outcome.
+// ---------------------------------------------------------------------------
+{
+  let claimCount = 0;
+  const completions: { id: string; outcome: string; error?: string }[] = [];
+  const db = {
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      if (fn === "claim_notification_image_deliveries") {
+        claimCount++;
+        if (claimCount === 1) {
+          return {
+            data: [
+              makeImageRow("f2", "face", "booking-2/face.jpg", "cccccccc-1111-4111-8111-111111111111"),
+              makeImageRow("s2", "payment_slip", "booking-2/order-2.jpg", "dddddddd-2222-4222-8222-222222222222"),
+            ],
+            error: null,
+          };
+        }
+        return { data: [], error: null };
+      }
+      completions.push({ id: args.p_id as string, outcome: args.p_outcome as string, error: args.p_error as string | undefined });
+      return { data: true, error: null };
+    },
+  };
+  const result = await runImageDeliveryWorker({
+    db,
+    sendImage: async (_to, url) => {
+      if (url.includes("face")) return { ok: false, retryable: true, error: "line_push_failed_500" };
+      return { ok: true };
+    },
+    signFaceUrl: async (p) => `https://signed.example/face/${p}`,
+    signSlipUrl: async (p) => `https://signed.example/slip/${p}`,
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(result, { ok: true, processed: 2, sent: 1, retried: 1, dead: 0 });
+  const byId = Object.fromEntries(completions.map((c) => [c.id, c]));
+  assert.equal(byId["f2"].outcome, "retry");
+  assert.equal(byId["f2"].error, "line_push_failed_500");
+  assert.equal(byId["s2"].outcome, "sent");
+}
+
+// ---------------------------------------------------------------------------
+// A permanent (non-retryable) failure completes as 'dead'; a signing failure
+// (null URL) is treated as retryable rather than silently dropped, so a
+// transient signing hiccup gets picked up again by a later cron tick.
+// ---------------------------------------------------------------------------
+{
+  let claimCount = 0;
+  const completions: { outcome: string; error?: string }[] = [];
+  const db = {
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      if (fn === "claim_notification_image_deliveries") {
+        claimCount++;
+        if (claimCount === 1) {
+          return { data: [makeImageRow("f3", "face", "booking-3/face.jpg", "eeeeeeee-1111-4111-8111-111111111111")], error: null };
+        }
+        return { data: [], error: null };
+      }
+      completions.push({ outcome: args.p_outcome as string, error: args.p_error as string | undefined });
+      return { data: true, error: null };
+    },
+  };
+  const deadResult = await runImageDeliveryWorker({
+    db,
+    sendImage: async () => ({ ok: false, retryable: false, error: "line_push_failed_400" }),
+    signFaceUrl: async (p) => `https://signed.example/${p}`,
+    signSlipUrl: async (p) => `https://signed.example/${p}`,
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(deadResult, { ok: true, processed: 1, sent: 0, retried: 0, dead: 1 });
+  assert.equal(completions[0].outcome, "dead");
+  assert.equal(completions[0].error, "line_push_failed_400");
+}
+
+{
+  let claimCount = 0;
+  const completions: { outcome: string; error?: string }[] = [];
+  const db = {
+    rpc: async (fn: string, args: Record<string, unknown>) => {
+      if (fn === "claim_notification_image_deliveries") {
+        claimCount++;
+        if (claimCount === 1) {
+          return { data: [makeImageRow("f4", "face", "booking-4/face.jpg", "ffffffff-1111-4111-8111-111111111111")], error: null };
+        }
+        return { data: [], error: null };
+      }
+      completions.push({ outcome: args.p_outcome as string, error: args.p_error as string | undefined });
+      return { data: true, error: null };
+    },
+  };
+  const signFailResult = await runImageDeliveryWorker({
+    db,
+    sendImage: async () => ({ ok: true }),
+    signFaceUrl: async () => null,
+    signSlipUrl: async (p) => `https://signed.example/${p}`,
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(signFailResult, { ok: true, processed: 1, sent: 0, retried: 1, dead: 0 });
+  assert.equal(completions[0].outcome, "retry");
+  assert.equal(completions[0].error, "sign_failed");
+}
+
+// ---------------------------------------------------------------------------
+// sendImage throwing is treated as retryable, never crashes the worker, and
+// the thrown message never enters logs.
+// ---------------------------------------------------------------------------
+{
+  let claimCount = 0;
+  const db = {
+    rpc: async (fn: string) => {
+      if (fn === "claim_notification_image_deliveries") {
+        claimCount++;
+        if (claimCount === 1) {
+          return { data: [makeImageRow("f5", "face", "booking-5/face.jpg", "11111111-9999-4999-8999-999999999999")], error: null };
+        }
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  const { result, logs } = await captureConsoleErrors(() =>
+    runImageDeliveryWorker({
+      db,
+      sendImage: async () => {
+        throw new Error("leaked-image-send-detail");
+      },
+      signFaceUrl: async (p) => `https://signed.example/${p}`,
+      signSlipUrl: async (p) => `https://signed.example/${p}`,
+      groupId: "group",
+      now: () => 0,
+      batch: 20,
+      timeBudgetMs: 50_000,
+    }),
+  );
+  assert.deepEqual(result, { ok: true, processed: 1, sent: 0, retried: 1, dead: 0 });
+  for (const args of logs) {
+    assert.doesNotMatch(JSON.stringify(args), /leaked-image-send-detail/);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The retry key is STABLE across separate claims of the identical row (a
+// stale-lease reclaim after a worker crash) — never regenerated per attempt.
+// ---------------------------------------------------------------------------
+{
+  let claimCount = 0;
+  const seenRetryKeys: string[] = [];
+  const db = {
+    rpc: async (fn: string) => {
+      if (fn === "claim_notification_image_deliveries") {
+        claimCount++;
+        if (claimCount <= 2) {
+          return { data: [makeImageRow("stable", "payment_slip", "booking-stable/order-stable.jpg", "22222222-8888-4888-8888-888888888888")], error: null };
+        }
+        return { data: [], error: null };
+      }
+      return { data: true, error: null };
+    },
+  };
+  await runImageDeliveryWorker({
+    db,
+    sendImage: async (_to, _url, retryKey) => {
+      seenRetryKeys.push(retryKey);
+      return { ok: true };
+    },
+    signFaceUrl: async (p) => `https://signed.example/${p}`,
+    signSlipUrl: async (p) => `https://signed.example/${p}`,
+    groupId: "group",
+    now: () => 0,
+    batch: 20,
+    timeBudgetMs: 50_000,
+  });
+  assert.deepEqual(seenRetryKeys, [
+    "22222222-8888-4888-8888-888888888888",
+    "22222222-8888-4888-8888-888888888888",
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// claim/completion RPC failures surface as a safe typed worker failure —
+// never a silent success — and no thrown/db detail ever enters logs. Same
+// shape as runDeliveryWorker's own claim/completion failure handling, kept
+// entirely on the image RPC pair.
+// ---------------------------------------------------------------------------
+{
+  const { result, logs } = await captureConsoleErrors(() =>
+    runImageDeliveryWorker({
+      db: { rpc: async () => ({ data: null, error: { message: "leaked-image-claim-detail" } }) },
+      sendImage: async () => ({ ok: true }),
+      signFaceUrl: async (p) => p,
+      signSlipUrl: async (p) => p,
+      groupId: "group",
+      now: () => 0,
+      batch: 20,
+      timeBudgetMs: 50_000,
+    }),
+  );
+  assert.deepEqual(result, { ok: false, code: "claim_failed" });
+  for (const args of logs) {
+    assert.doesNotMatch(JSON.stringify(args), /leaked-image-claim-detail/);
+  }
 }
 
 console.log("delivery-worker self-check passed");

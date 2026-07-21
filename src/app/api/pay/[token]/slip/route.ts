@@ -67,12 +67,13 @@ function buildProvider(): SlipVerificationProvider | null {
 }
 
 // Best-effort payment-slip evidence storage. Never throws, never blocks
-// confirmation: a storage hiccup must not stop a real payment from being
-// confirmed, it just means no slip image gets attached to the team
-// notification. Uploads to storage FIRST, then records the DB row — if the
-// DB insert fails, the just-uploaded object is best-effort removed so a
-// failed evidence write never leaves an unreferenced file (see 0013's
-// migration header for the documented residual failure mode).
+// confirmation: a storage or network hiccup must not stop a real payment
+// from being confirmed — it just means no slip image gets attached to the
+// team notification. Every storage/DB call is wrapped so a thrown exception
+// (not just a returned {error}) can never escape and crash the caller.
+// Concurrent/repeated uploads for the same order are safe: the path is
+// deterministic and upload() upserts, so re-verification attempts on the
+// same still-open order simply overwrite with the latest image.
 async function storeSlipEvidence(
   db: ReturnType<typeof supabaseAdmin>,
   orderId: string,
@@ -81,22 +82,83 @@ async function storeSlipEvidence(
   mimeType: "image/jpeg" | "image/png" | "image/webp",
 ): Promise<void> {
   const path = `${bookingId}/${orderId}.${SLIP_EXT[mimeType]}`;
-  const { error: uploadErr } = await db.storage
-    .from("payment-slips")
-    .upload(path, image, { contentType: mimeType, upsert: true });
-  if (uploadErr) {
-    console.error("[slip] evidence upload failed", { orderId });
+  try {
+    const { error: uploadErr } = await db.storage
+      .from("payment-slips")
+      .upload(path, image, { contentType: mimeType, upsert: true });
+    if (uploadErr) {
+      console.error("[slip] evidence upload failed", { orderId });
+      await recordEvidenceFailure(db, orderId, bookingId, "upload");
+      return;
+    }
+  } catch {
+    console.error("[slip] evidence upload threw", { orderId });
+    await recordEvidenceFailure(db, orderId, bookingId, "upload");
     return;
   }
-  const { error: insertErr } = await db.from("payment_slip_images").insert({
-    payment_order_id: orderId,
-    booking_id: bookingId,
-    storage_path: path,
-    mime_type: mimeType,
-  });
-  if (insertErr) {
-    await db.storage.from("payment-slips").remove([path]).catch(() => undefined);
-    console.error("[slip] evidence record failed, storage object removed", { orderId });
+
+  try {
+    const { error: insertErr } = await db.from("payment_slip_images").insert({
+      payment_order_id: orderId,
+      booking_id: bookingId,
+      storage_path: path,
+      mime_type: mimeType,
+    });
+    if (insertErr) {
+      await cleanupUnreferencedUpload(db, orderId, path);
+      console.error("[slip] evidence record failed", { orderId });
+      await recordEvidenceFailure(db, orderId, bookingId, "record");
+    }
+  } catch {
+    await cleanupUnreferencedUpload(db, orderId, path);
+    console.error("[slip] evidence record threw", { orderId });
+    await recordEvidenceFailure(db, orderId, bookingId, "record");
+  }
+}
+
+// Only removes the just-uploaded object when no payment_slip_images row for
+// this order exists at all — i.e. this really was the first attempt and
+// nothing references the path yet. The path is deterministic and reused
+// across repeated attempts on the same order, so if an EARLIER attempt
+// already succeeded, that row still references this exact path even though
+// this attempt's upsert just overwrote its bytes — deleting the object in
+// that case would break a still-valid evidence record. Never throws.
+async function cleanupUnreferencedUpload(
+  db: ReturnType<typeof supabaseAdmin>,
+  orderId: string,
+  path: string,
+): Promise<void> {
+  try {
+    const { count } = await db
+      .from("payment_slip_images")
+      .select("id", { count: "exact", head: true })
+      .eq("payment_order_id", orderId);
+    if (count && count > 0) return;
+    await db.storage.from("payment-slips").remove([path]);
+  } catch {
+    // Best-effort only — see this file's storeSlipEvidence header and
+    // 0013's migration header for the documented residual failure mode.
+  }
+}
+
+// Durable, queryable record of a failed evidence write (see
+// public.payment_slip_evidence_failures, 0013). Best-effort: if even this
+// insert fails, there is nothing further to do — the console.error call
+// beside every call site remains the last resort.
+async function recordEvidenceFailure(
+  db: ReturnType<typeof supabaseAdmin>,
+  orderId: string,
+  bookingId: string,
+  stage: "upload" | "record",
+): Promise<void> {
+  try {
+    await db.from("payment_slip_evidence_failures").insert({
+      payment_order_id: orderId,
+      booking_id: bookingId,
+      stage,
+    });
+  } catch {
+    // Nothing further to do — best-effort.
   }
 }
 
