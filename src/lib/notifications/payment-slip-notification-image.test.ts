@@ -71,6 +71,17 @@ for (const col of ["status", "attempt_count", "next_retry_at", "sent_at", "last_
 }
 
 // ===========================================================================
+// Release blocker 3: payment_slip_images.storage_path must be protected by a
+// real uniqueness constraint — evidence objects are immutable, one row per
+// unique path.
+// ===========================================================================
+assert.match(
+  migration,
+  /create unique index if not exists payment_slip_images_storage_path_uniq\s*\n\s*on public\.payment_slip_images\(storage_path\)/,
+  "payment_slip_images.storage_path must have a uniqueness constraint",
+);
+
+// ===========================================================================
 // claim_notification_image_deliveries / complete_notification_image_delivery
 // mirror claim_team_notification_deliveries / complete_notification_delivery
 // (0007): SECURITY DEFINER, search_path pinned, service_role only, and the
@@ -99,6 +110,19 @@ function imageRpcBody(name: string): string {
 }
 assert.match(imageRpcBody("claim_notification_image_deliveries"), /security definer\s*\nset search_path = public, pg_temp/);
 assert.match(imageRpcBody("complete_notification_image_delivery"), /security definer\s*\nset search_path = public, pg_temp/);
+
+// ===========================================================================
+// Release blocker 1: claim_notification_image_deliveries must never claim a
+// row whose parent notification_deliveries row is not yet 'sent' — enforced
+// inside the claim function's own candidate query (EXISTS check), not only
+// by TypeScript worker sequencing.
+// ===========================================================================
+const claimBody = imageRpcBody("claim_notification_image_deliveries");
+assert.match(
+  claimBody,
+  /exists \(\s*\n\s*select 1 from public\.notification_deliveries nd\s*\n\s*where nd\.id = nid\.notification_delivery_id\s*\n\s*and nd\.status = 'sent'\s*\n\s*\)/,
+  "claim_notification_image_deliveries must gate every candidate row on its parent notification_deliveries row already being 'sent'",
+);
 // Same fixed backoff schedule as complete_notification_delivery (0007).
 assert.match(imageRpcBody("complete_notification_image_delivery"), /when 1 then 1[\s\S]*when 2 then 5[\s\S]*when 3 then 15[\s\S]*when 4 then 60[\s\S]*when 5 then 360/);
 assert.match(imageRpcBody("complete_notification_image_delivery"), /v_attempt >= 6/);
@@ -164,6 +188,14 @@ const faceLookups = confirmSlipBody.match(/select bi\.storage_path into v_face_p
 assert.equal(faceLookups.length, 2, "confirm_slip_payment must look up the face image in both its manual_review and success branches");
 const slipLookups = confirmSlipBody.match(/select psi\.storage_path into v_slip_path\s*\n\s*from public\.payment_slip_images psi/g) ?? [];
 assert.equal(slipLookups.length, 2, "confirm_slip_payment must look up the slip image in both its manual_review and success branches");
+
+// Release blocker 3: both lookups must break created_at ties on id so the
+// freshest evidence row is picked deterministically even when two uploads
+// for the same order/booking commit at the exact same instant.
+const faceOrderings = confirmSlipBody.match(/order by bi\.created_at desc, bi\.id desc/g) ?? [];
+assert.equal(faceOrderings.length, 2, "confirm_slip_payment's face lookup must break created_at ties on id in both branches");
+const slipOrderings = confirmSlipBody.match(/order by psi\.created_at desc, psi\.id desc/g) ?? [];
+assert.equal(slipOrderings.length, 2, "confirm_slip_payment's slip lookup must break created_at ties on id in both branches");
 const faceInserts = confirmSlipBody.match(/values \(v_notification_id, 'face', v_face_path\)/g) ?? [];
 assert.equal(faceInserts.length, 2, "confirm_slip_payment must conditionally enqueue a face image task in both branches");
 const slipInserts = confirmSlipBody.match(/values \(v_notification_id, 'payment_slip', v_slip_path\)/g) ?? [];
@@ -193,6 +225,7 @@ assert.doesNotMatch(approveBody, /v_face_path|v_slip_path/, "approve_manual_revi
 // never implies a payment was received.
 // ===========================================================================
 assert.match(transitionBody, /select bi\.storage_path into v_face_path/, "admin override must still attach the face image");
+assert.match(transitionBody, /order by bi\.created_at desc, bi\.id desc/, "admin override's face lookup must break created_at ties on id");
 assert.match(transitionBody, /'face', v_face_path/, "admin override must enqueue a face image task");
 assert.doesNotMatch(transitionBody, /payment_slip_images|'payment_slip'/, "admin override must never reference slip evidence or enqueue a slip task");
 assert.doesNotMatch(transitionBody, /expected_amount_satang|received_amount_satang/, "admin override must never include amount fields — it has no verified payment");
@@ -235,5 +268,32 @@ assert.match(routeSrc, /payment_slip_evidence_failures/, "failures must be recor
 const cleanupFnSrc = routeSrc.slice(routeSrc.indexOf("async function cleanupUnreferencedUpload"), routeSrc.indexOf("async function recordEvidenceFailure"));
 assert.match(cleanupFnSrc, /count && count > 0\) return/, "cleanup must never remove an object still referenced by an earlier attempt's row");
 assert.match(cleanupFnSrc, /\.remove\(\[path\]\)/, "cleanup must only remove the object when nothing references it");
+
+// ===========================================================================
+// Release blocker 2: every evidence-storage function must return an
+// explicit typed outcome — a returned {error} from Supabase must never be
+// silently ignored, and the route must never treat evidence as fully
+// handled just because storeSlipEvidence didn't throw.
+// ===========================================================================
+assert.match(storeFnSrc, /Promise<EvidenceOutcome>/, "storeSlipEvidence must return a typed outcome, not void");
+assert.match(storeFnSrc, /return "stored"/, "storeSlipEvidence must return 'stored' on success");
+assert.match(storeFnSrc, /return "upload_failed"/, "storeSlipEvidence must return 'upload_failed' on upload failure");
+assert.match(storeFnSrc, /return "record_failed"/, "storeSlipEvidence must return 'record_failed' on DB-record failure");
+const recordFailureFnSrc = routeSrc.slice(routeSrc.indexOf("async function recordEvidenceFailure"), routeSrc.indexOf("export async function POST"));
+assert.match(recordFailureFnSrc, /const \{ error \} = await db\.from\("payment_slip_evidence_failures"\)\.insert/, "recordEvidenceFailure must inspect the insert's returned error, not just catch a thrown exception");
+assert.match(recordFailureFnSrc, /if \(error\)/, "recordEvidenceFailure must branch on a returned {error}");
+assert.match(recordFailureFnSrc, /Promise<"recorded" \| "failed">/, "recordEvidenceFailure must return a typed recorded/failed outcome");
+assert.match(routeSrc, /const evidenceOutcome = await storeSlipEvidence\(/, "the route must capture storeSlipEvidence's outcome, never discard it");
+assert.match(routeSrc, /if \(evidenceOutcome !== "stored"\)/, "the route must explicitly branch when evidence was not durably stored, never silently treat it as the complete happy path");
+
+// ===========================================================================
+// Release blocker 3: every upload gets its own unique, immutable object
+// path (never reused across attempts) and is written with upsert: false;
+// cleanup is scoped to the exact uploaded path, never to the whole order.
+// ===========================================================================
+assert.match(storeFnSrc, /\$\{bookingId\}\/\$\{orderId\}\/\$\{crypto\.randomUUID\(\)\}\.\$\{SLIP_EXT\[mimeType\]\}/, "each upload must get its own unique uuid-based object path");
+assert.match(storeFnSrc, /upsert:\s*false/, "uploads must never overwrite an existing object (upsert: false)");
+assert.match(cleanupFnSrc, /\.eq\("storage_path", path\)/, "cleanup must check the exact uploaded path, not just the order, since paths are now unique per attempt");
+assert.doesNotMatch(cleanupFnSrc, /\.eq\("payment_order_id"/, "cleanup must no longer scope by payment_order_id now that paths are unique per attempt");
 
 console.log("payment-slip-notification-image self-check passed");

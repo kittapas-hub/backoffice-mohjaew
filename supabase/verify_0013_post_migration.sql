@@ -47,6 +47,7 @@ column_summary as (
 required_indexes(index_name, expect_unique) as (
   values
     ('payment_slip_images_order_idx', false),
+    ('payment_slip_images_storage_path_uniq', true),
     ('payment_slip_evidence_failures_order_idx', false),
     ('notification_image_deliveries_due_idx', false),
     ('notification_image_deliveries_locked_idx', false),
@@ -120,6 +121,18 @@ image_rpc_summary as (
         and coalesce(proconfig, '{}'::text[]) @> array['search_path=public, pg_temp']
     )::int as hardened_count
   from image_rpc_rows
+),
+image_claim_gate_summary as (
+  select
+    count(*)::int as total_count,
+    count(*) filter (
+      where position('notification_deliveries' in p.prosrc) > 0
+        and position(quote_literal('sent') in p.prosrc) > 0
+        and position('nid.notification_delivery_id' in p.prosrc) > 0
+    )::int as gated_count
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'claim_notification_image_deliveries'
 ),
 image_rpc_acl_summary as (
   select
@@ -202,6 +215,9 @@ checks(check_name, pass, evidence) as (
   union all
   select 'image_delivery_rpc_acl_service_role_only', expected_count = safe_count,
     format('safe=%s/%s', safe_count, expected_count) from image_rpc_acl_summary
+  union all
+  select 'image_claim_requires_parent_sent', total_count = 1 and gated_count = 1,
+    format('gated=%s/%s', gated_count, total_count) from image_claim_gate_summary
   union all
   select 'confirmation_functions_present', n = 3,
     format('present=%s/3', n) from function_count

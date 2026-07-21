@@ -18,7 +18,7 @@
 -- call — the same enforcement mechanism 0012's provenance defect fix added.
 with
 source_provenance_facts as (
-  select 'e9ddc7af68ad203cec73562073fd878e224008b4'::text as migration_blob
+  select 'f8af707862d7782cc5e6d9c8e56b9779ab935b8d'::text as migration_blob
 ),
 required_0012_functions(signature) as (
   values
@@ -84,7 +84,7 @@ pgcrypto_available as (
 ),
 checks as (
   select 'source_provenance'::text as check_name,
-    migration_blob = 'e9ddc7af68ad203cec73562073fd878e224008b4' as pass,
+    migration_blob = 'f8af707862d7782cc5e6d9c8e56b9779ab935b8d' as pass,
     jsonb_build_object('migration_blob', migration_blob) as evidence
   from source_provenance_facts
   union all

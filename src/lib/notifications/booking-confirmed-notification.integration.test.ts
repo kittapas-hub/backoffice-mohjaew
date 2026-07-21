@@ -480,6 +480,9 @@ try {
     const [row] = await confirmedNotifications(id);
     const [imageRow] = await imageDeliveries(row.id);
     assert.ok(imageRow, "the admin-override confirmation must have enqueued a face image task");
+    // Blocker 1: an image row is only claimable once its parent text row has
+    // reached 'sent' — simulate the text worker having already delivered it.
+    await db.query("update public.notification_deliveries set status='sent', sent_at=now() where id=$1", [row.id]);
 
     // Batch large enough to sweep up every pending image task this suite has
     // created so far (harmless side effect: they just move to 'processing',
@@ -579,6 +582,144 @@ try {
     // The slip task (if any — none here, admin override) is untouched; this
     // booking has exactly the one face task we've been manipulating.
     assert.equal((await imageDeliveries(row.id)).length, 1);
+  }
+
+  // =========================================================================
+  // Release blocker 1: an image row must never be claimable before its
+  // parent notification_deliveries row has reached 'sent'. A
+  // pending/failed/processing/dead parent must block BOTH of its own image
+  // rows from ever being claimed; once the parent is 'sent', both become
+  // claimable normally; and completing an image must never touch (resend,
+  // requeue, or otherwise change) the parent text row.
+  // =========================================================================
+  {
+    const id = await booking({ withImage: true });
+    const orderId = await order(id, "parent-gate");
+    await slipEvidence(orderId, id);
+    const result = (await db.query(
+      `select public.confirm_slip_payment($1,'promptpay_slip','REF PG GATE',now(),99900,'THB','profile-test','{}'::jsonb) as result`,
+      [orderId],
+    )).rows[0].result;
+    assert.equal(result.result, "ok");
+    const [row] = await confirmedNotifications(id);
+    const ourImageIds: string[] = (await db.query(
+      "select id from public.notification_image_deliveries where notification_delivery_id=$1",
+      [row.id],
+    )).rows.map((r) => r.id);
+    assert.equal(ourImageIds.length, 2, "automatic confirmation must enqueue both a face and a slip image task");
+
+    async function claimedOursWith(status: string, workerId: string): Promise<number> {
+      await db.query("update public.notification_deliveries set status=$2 where id=$1", [row.id, status]);
+      const claimed: { id: string }[] = (await db.query(
+        "select id from public.claim_notification_image_deliveries($1,$2)",
+        [workerId, 500],
+      )).rows;
+      return claimed.filter((c) => ourImageIds.includes(c.id)).length;
+    }
+
+    // 1. A pending/failed/processing/dead parent text blocks every one of
+    //    its own image rows — zero claimed in every case.
+    assert.equal(await claimedOursWith("pending", "worker-gate-pending"), 0, "a pending parent text must block its image rows");
+    assert.equal(await claimedOursWith("failed", "worker-gate-failed"), 0, "a retryable/failed parent text must block its image rows");
+    assert.equal(await claimedOursWith("processing", "worker-gate-processing"), 0, "a processing parent text must block its image rows");
+    assert.equal(await claimedOursWith("dead", "worker-gate-dead"), 0, "a dead parent text must block its image rows");
+
+    // 2. Once the parent reaches 'sent', both pending image rows become
+    //    claimable normally.
+    await db.query("update public.notification_deliveries set status='sent', sent_at=now() where id=$1", [row.id]);
+    const claimedAfterSent: { id: string; image_kind: string }[] = (await db.query(
+      "select id, image_kind from public.claim_notification_image_deliveries($1,$2)",
+      ["worker-gate-sent", 500],
+    )).rows;
+    const ours = claimedAfterSent.filter((c) => ourImageIds.includes(c.id));
+    assert.equal(ours.length, 2, "once the parent text is sent, both its face and slip image rows must become claimable");
+    assert.deepEqual(new Set(ours.map((c) => c.image_kind)), new Set(["face", "payment_slip"]));
+
+    // 3. Completing an image (here, 'sent') must never resend, requeue, or
+    //    otherwise mutate the parent text row.
+    for (const claim of ours) {
+      await db.query("select public.complete_notification_image_delivery($1,'worker-gate-sent','sent') as ok", [claim.id]);
+    }
+    const textAfter = (await db.query("select status from public.notification_deliveries where id=$1", [row.id])).rows[0];
+    assert.equal(textAfter.status, "sent", "completing an image must never change the parent text row's status");
+  }
+
+  // =========================================================================
+  // Release blocker 3: slip evidence objects are immutable. Each upload gets
+  // its own unique storage_path (never reused across attempts, so a
+  // concurrent/repeated upload for the same order can never overwrite an
+  // earlier successful attempt's bytes), enforced by a real uniqueness
+  // constraint, and confirm_slip_payment's evidence lookup is deterministic
+  // even when two uploads for the same order commit at the exact same
+  // instant.
+  // =========================================================================
+  {
+    const id = await booking({ withImage: false });
+    const orderId = await order(id, "concurrent-evidence");
+
+    // Two "concurrent" upload attempts for the same still-open order, each
+    // with its own unique path and a different MIME type/extension —
+    // mirrors storeSlipEvidence's `${bookingId}/${orderId}/${uuid}.${ext}`
+    // convention. Identical created_at forces the id-desc tiebreak.
+    const pathA = `${id}/${orderId}/11111111-1111-4111-8111-111111111111.jpg`;
+    const pathB = `${id}/${orderId}/22222222-2222-4222-8222-222222222222.png`;
+    const tiedAt = "2026-07-21T00:00:00Z";
+    await db.query(
+      "insert into public.payment_slip_images(payment_order_id, booking_id, storage_path, mime_type, created_at) values ($1,$2,$3,'image/jpeg',$4)",
+      [orderId, id, pathA, tiedAt],
+    );
+    await db.query(
+      "insert into public.payment_slip_images(payment_order_id, booking_id, storage_path, mime_type, created_at) values ($1,$2,$3,'image/png',$4)",
+      [orderId, id, pathB, tiedAt],
+    );
+
+    // Selection under a created_at tie is deterministic — always the same
+    // row on repeated evaluation, never "whichever Postgres happens to
+    // return first".
+    const pick = () => db.query(
+      "select storage_path from public.payment_slip_images where payment_order_id=$1 order by created_at desc, id desc limit 1",
+      [orderId],
+    );
+    const first = (await pick()).rows[0].storage_path;
+    const second = (await pick()).rows[0].storage_path;
+    assert.equal(first, second, "evidence selection under a created_at tie must be deterministic across repeated evaluation");
+    assert.ok([pathA, pathB].includes(first));
+
+    // A real DB insert failing after upload (e.g. a duplicate storage_path)
+    // is rejected outright by the new uniqueness constraint — the
+    // application never generates a colliding path itself (each attempt
+    // mints its own uuid), but the constraint is the DB-level guarantee, not
+    // just an application-level convention.
+    await assert.rejects(
+      () => db.query(
+        "insert into public.payment_slip_images(payment_order_id, booking_id, storage_path, mime_type) values ($1,$2,$3,'image/jpeg')",
+        [orderId, id, pathA],
+      ),
+      /duplicate key|unique/i,
+      "storage_path must be protected by a real uniqueness constraint",
+    );
+
+    // The rejected duplicate insert changed nothing: both earlier evidence
+    // rows remain, unchanged and still referenced.
+    const stillThere = (await db.query(
+      "select count(*)::int as n from public.payment_slip_images where payment_order_id=$1 and storage_path=any($2::text[])",
+      [orderId, [pathA, pathB]],
+    )).rows[0].n;
+    assert.equal(stillThere, 2, "both earlier evidence rows must remain, unchanged and referenced, after a rejected duplicate insert");
+
+    // confirm_slip_payment must enqueue exactly one deterministic slip image
+    // task — never both, never neither — pointing at a real evidence row.
+    const result = (await db.query(
+      `select public.confirm_slip_payment($1,'promptpay_slip','REF PG CONCURRENT',now(),99900,'THB','profile-test','{}'::jsonb) as result`,
+      [orderId],
+    )).rows[0].result;
+    assert.equal(result.result, "ok");
+    const rows = await confirmedNotifications(id);
+    const images = await imageDeliveries(rows[0].id);
+    const slipTasks = images.filter((r) => r.image_kind === "payment_slip");
+    assert.equal(slipTasks.length, 1, "confirmation must enqueue exactly one slip image task despite two evidence rows on file");
+    assert.ok([pathA, pathB].includes(slipTasks[0].storage_path), "the enqueued slip path must point at a real, still-existing evidence row");
+    assert.equal(slipTasks[0].storage_path, first, "the enqueued slip path must match the same deterministic selection");
   }
 
   // =========================================================================

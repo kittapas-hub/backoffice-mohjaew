@@ -26,6 +26,32 @@
 -- separate pieces of information the team needs together, not substitutes
 -- for one another. This revision sends both, tracked independently.
 --
+-- Correction note (release-blocker fixes, this revision):
+--   1. claim_notification_image_deliveries could claim a face/slip row
+--      before its parent notification_deliveries row had actually reached
+--      'sent' — a retryable/pending/processing/dead parent text row no
+--      longer blocks its own image rows from being claimed and sent ahead of
+--      it. The gate is enforced inside the claim function's own candidate
+--      query (an EXISTS check against notification_deliveries.status), not
+--      only by worker sequencing in TypeScript.
+--   2. The TS upload route's recordEvidenceFailure ignored a returned
+--      { error } from the Supabase insert (only a thrown exception was
+--      handled). Every evidence-storage function now returns an explicit
+--      typed outcome so a caller can never mistake "insert returned an
+--      error" for "recorded".
+--   3. The slip object path was deterministic
+--      (<booking_id>/<payment_order_id>.<ext>) and uploaded with
+--      upsert: true, so a later or concurrent upload attempt for the same
+--      order could overwrite the bytes an earlier successful attempt's
+--      payment_slip_images row still referenced. Evidence objects are now
+--      immutable: each upload gets its own unique path
+--      (<booking_id>/<payment_order_id>/<uuid>.<ext>), uploaded with
+--      upsert: false, and payment_slip_images.storage_path is now unique.
+--      confirm_slip_payment's evidence lookups now break created_at ties on
+--      id (order by created_at desc, id desc) so the freshest row is picked
+--      deterministically even when two uploads for the same order commit in
+--      the same millisecond.
+--
 -- The three parts:
 --
 --   1. A private Storage bucket 'payment-slips' (separate from
@@ -115,6 +141,11 @@ create table if not exists public.payment_slip_images (
 );
 create index if not exists payment_slip_images_order_idx
   on public.payment_slip_images(payment_order_id, created_at desc);
+-- Evidence objects are immutable and each upload gets its own unique path
+-- (see the TS upload route) — this constraint is the DB-level guarantee that
+-- two rows can never claim the same underlying storage object.
+create unique index if not exists payment_slip_images_storage_path_uniq
+  on public.payment_slip_images(storage_path);
 alter table public.payment_slip_images enable row level security;
 revoke all on table public.payment_slip_images from anon, authenticated;
 grant all on table public.payment_slip_images to service_role;
@@ -178,7 +209,13 @@ grant all on table public.notification_image_deliveries to service_role;
 --    claim_team_notification_deliveries (0007) exactly: pending/failed rows
 --    due for retry, or a 'processing' row whose lease has gone stale
 --    (worker crashed mid-send), FOR UPDATE SKIP LOCKED so two workers can
---    never claim the same row.
+--    never claim the same row. Additionally gated on the parent
+--    notification_deliveries row already being 'sent' — an image must never
+--    reach LINE ahead of (or in place of) its own text, so a
+--    pending/processing/failed/dead parent blocks every one of its image
+--    rows from being claimed until the text is delivered. Enforced here
+--    (not only by TypeScript worker sequencing) so no future caller of this
+--    RPC can accidentally bypass the ordering guarantee.
 -- ===========================================================================
 create function public.claim_notification_image_deliveries(
   p_worker_id text,
@@ -207,9 +244,16 @@ begin
     with candidates as (
       select nid.id
         from public.notification_image_deliveries nid
-       where (nid.status in ('pending', 'failed')
-              and (nid.next_retry_at is null or nid.next_retry_at <= now()))
-          or (nid.status = 'processing' and nid.locked_at < now() - interval '10 minutes')
+       where (
+              (nid.status in ('pending', 'failed')
+               and (nid.next_retry_at is null or nid.next_retry_at <= now()))
+           or (nid.status = 'processing' and nid.locked_at < now() - interval '10 minutes')
+         )
+         and exists (
+               select 1 from public.notification_deliveries nd
+                where nd.id = nid.notification_delivery_id
+                  and nd.status = 'sent'
+             )
        order by nid.created_at
        limit v_batch
          for update skip locked
@@ -414,12 +458,12 @@ begin
     select bi.storage_path into v_face_path
       from public.booking_images bi
      where bi.booking_id = v_order.booking_id
-     order by bi.created_at desc
+     order by bi.created_at desc, bi.id desc
      limit 1;
     select psi.storage_path into v_slip_path
       from public.payment_slip_images psi
      where psi.payment_order_id = p_payment_order_id
-     order by psi.created_at desc
+     order by psi.created_at desc, psi.id desc
      limit 1;
 
     insert into public.notification_deliveries(
@@ -471,12 +515,12 @@ begin
   select bi.storage_path into v_face_path
     from public.booking_images bi
    where bi.booking_id = v_order.booking_id
-   order by bi.created_at desc
+   order by bi.created_at desc, bi.id desc
    limit 1;
   select psi.storage_path into v_slip_path
     from public.payment_slip_images psi
    where psi.payment_order_id = p_payment_order_id
-   order by psi.created_at desc
+   order by psi.created_at desc, psi.id desc
    limit 1;
 
   insert into public.notification_deliveries (
@@ -738,7 +782,7 @@ begin
     select bi.storage_path into v_face_path
       from public.booking_images bi
      where bi.booking_id = p_booking_id
-     order by bi.created_at desc
+     order by bi.created_at desc, bi.id desc
      limit 1;
 
     insert into public.notification_deliveries (

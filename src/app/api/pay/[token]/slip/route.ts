@@ -12,8 +12,12 @@
 // once the image passes local validation, EasySlip provider verification,
 // and slip policy checks — i.e. right before this route calls
 // confirmSlipPayment — the original image is stored in the private
-// 'payment-slips' bucket and recorded in public.payment_slip_images. Images
-// that fail validation or provider verification are never stored.
+// 'payment-slips' bucket under its own unique, immutable object path and
+// recorded in public.payment_slip_images. Images that fail validation or
+// provider verification are never stored. A storage/DB failure at this
+// stage never blocks the (already-verified) payment from being confirmed —
+// it is durably recorded in public.payment_slip_evidence_failures instead,
+// for manual follow-up.
 import { NextResponse, type NextRequest } from "next/server";
 import crypto from "node:crypto";
 import { recordRateHit } from "@/lib/booking-core";
@@ -66,35 +70,50 @@ function buildProvider(): SlipVerificationProvider | null {
   return easySlipProvider({ apiKey: cfg.easySlipApiKey });
 }
 
+// Typed outcome of a slip-evidence storage attempt. The caller must not
+// treat evidence as attached just because this function returned without
+// throwing — a returned outcome other than "stored" means the durable
+// payment_slip_evidence_failures row (see recordEvidenceFailure) is the
+// operational/manual-review record of what needs following up, and the team
+// notification will simply enqueue no slip image task (never a false claim
+// that the slip was attached).
+type EvidenceOutcome = "stored" | "upload_failed" | "record_failed";
+
 // Best-effort payment-slip evidence storage. Never throws, never blocks
-// confirmation: a storage or network hiccup must not stop a real payment
-// from being confirmed — it just means no slip image gets attached to the
-// team notification. Every storage/DB call is wrapped so a thrown exception
-// (not just a returned {error}) can never escape and crash the caller.
-// Concurrent/repeated uploads for the same order are safe: the path is
-// deterministic and upload() upserts, so re-verification attempts on the
-// same still-open order simply overwrite with the latest image.
+// confirmation: a storage or network hiccup must not stop a real, verified
+// payment from being confirmed — it just means no slip image gets attached
+// to the team notification, and the failure is durably recorded for manual
+// follow-up (never silently dropped). Every storage/DB call is wrapped so a
+// thrown exception (not just a returned {error}) can never escape and crash
+// the caller.
+//
+// Evidence objects are immutable: every call gets its own unique object
+// path (booking/order/uuid), uploaded with upsert: false, so a concurrent or
+// repeated upload attempt for the same still-open order can never overwrite
+// bytes an earlier successful attempt's payment_slip_images row still
+// references. confirm_slip_payment picks the freshest row deterministically
+// (order by created_at desc, id desc — see 0013's migration).
 async function storeSlipEvidence(
   db: ReturnType<typeof supabaseAdmin>,
   orderId: string,
   bookingId: string,
   image: Buffer,
   mimeType: "image/jpeg" | "image/png" | "image/webp",
-): Promise<void> {
-  const path = `${bookingId}/${orderId}.${SLIP_EXT[mimeType]}`;
+): Promise<EvidenceOutcome> {
+  const path = `${bookingId}/${orderId}/${crypto.randomUUID()}.${SLIP_EXT[mimeType]}`;
   try {
     const { error: uploadErr } = await db.storage
       .from("payment-slips")
-      .upload(path, image, { contentType: mimeType, upsert: true });
+      .upload(path, image, { contentType: mimeType, upsert: false });
     if (uploadErr) {
       console.error("[slip] evidence upload failed", { orderId });
       await recordEvidenceFailure(db, orderId, bookingId, "upload");
-      return;
+      return "upload_failed";
     }
   } catch {
     console.error("[slip] evidence upload threw", { orderId });
     await recordEvidenceFailure(db, orderId, bookingId, "upload");
-    return;
+    return "upload_failed";
   }
 
   try {
@@ -105,34 +124,35 @@ async function storeSlipEvidence(
       mime_type: mimeType,
     });
     if (insertErr) {
-      await cleanupUnreferencedUpload(db, orderId, path);
+      await cleanupUnreferencedUpload(db, path);
       console.error("[slip] evidence record failed", { orderId });
       await recordEvidenceFailure(db, orderId, bookingId, "record");
+      return "record_failed";
     }
   } catch {
-    await cleanupUnreferencedUpload(db, orderId, path);
+    await cleanupUnreferencedUpload(db, path);
     console.error("[slip] evidence record threw", { orderId });
     await recordEvidenceFailure(db, orderId, bookingId, "record");
+    return "record_failed";
   }
+
+  return "stored";
 }
 
-// Only removes the just-uploaded object when no payment_slip_images row for
-// this order exists at all — i.e. this really was the first attempt and
-// nothing references the path yet. The path is deterministic and reused
-// across repeated attempts on the same order, so if an EARLIER attempt
-// already succeeded, that row still references this exact path even though
-// this attempt's upsert just overwrote its bytes — deleting the object in
-// that case would break a still-valid evidence record. Never throws.
+// Only removes the just-uploaded object when no payment_slip_images row
+// references this EXACT path — i.e. this attempt's own insert never
+// committed. Every upload writes to its own unique path (never reused
+// across attempts), so this can never remove an object an earlier
+// successful attempt's row still references. Never throws.
 async function cleanupUnreferencedUpload(
   db: ReturnType<typeof supabaseAdmin>,
-  orderId: string,
   path: string,
 ): Promise<void> {
   try {
     const { count } = await db
       .from("payment_slip_images")
       .select("id", { count: "exact", head: true })
-      .eq("payment_order_id", orderId);
+      .eq("storage_path", path);
     if (count && count > 0) return;
     await db.storage.from("payment-slips").remove([path]);
   } catch {
@@ -142,23 +162,33 @@ async function cleanupUnreferencedUpload(
 }
 
 // Durable, queryable record of a failed evidence write (see
-// public.payment_slip_evidence_failures, 0013). Best-effort: if even this
-// insert fails, there is nothing further to do — the console.error call
-// beside every call site remains the last resort.
+// public.payment_slip_evidence_failures, 0013) — the operational
+// manual-review state for a verified payment whose slip evidence could not
+// be retained. Returns a typed outcome so a caller can never mistake a
+// returned {error} (which Supabase commonly returns instead of throwing)
+// for a successfully recorded row. Best-effort: if even this insert fails,
+// there is nothing further to do — the console.error call beside every call
+// site remains the last resort.
 async function recordEvidenceFailure(
   db: ReturnType<typeof supabaseAdmin>,
   orderId: string,
   bookingId: string,
   stage: "upload" | "record",
-): Promise<void> {
+): Promise<"recorded" | "failed"> {
   try {
-    await db.from("payment_slip_evidence_failures").insert({
+    const { error } = await db.from("payment_slip_evidence_failures").insert({
       payment_order_id: orderId,
       booking_id: bookingId,
       stage,
     });
+    if (error) {
+      console.error("[slip] evidence-failure record failed", { orderId, stage });
+      return "failed";
+    }
+    return "recorded";
   } catch {
-    // Nothing further to do — best-effort.
+    console.error("[slip] evidence-failure record threw", { orderId, stage });
+    return "failed";
   }
 }
 
@@ -383,7 +413,19 @@ export async function POST(
 
   // Retain the validated original as payment evidence — only now, once local
   // validation, provider verification, and policy checks have all passed.
-  await storeSlipEvidence(db, order.id, order.booking_id, image, imgCheck.meta.type);
+  const evidenceOutcome = await storeSlipEvidence(db, order.id, order.booking_id, image, imgCheck.meta.type);
+  if (evidenceOutcome !== "stored") {
+    // A genuine, verified payment must still be confirmed below — a storage
+    // hiccup must never lose it — but this is explicitly NOT the fully
+    // handled happy path: recordEvidenceFailure already wrote a durable
+    // payment_slip_evidence_failures row (the manual-review follow-up
+    // record), and confirm_slip_payment will simply find no slip on file, so
+    // the team notification never falsely claims a slip was attached.
+    console.error("[slip] confirming payment without durably stored slip evidence — manual follow-up required", {
+      orderId: order.id,
+      outcome: evidenceOutcome,
+    });
+  }
 
   // One atomic, idempotent confirmation.
   const confirmed = await confirmSlipPayment({

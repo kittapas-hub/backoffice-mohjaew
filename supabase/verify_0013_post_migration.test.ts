@@ -25,6 +25,7 @@ for (const check of [
   "payment_slip_tables_rls_and_acl",
   "image_delivery_rpcs_present_and_hardened",
   "image_delivery_rpc_acl_service_role_only",
+  "image_claim_requires_parent_sent",
   "confirmation_functions_present",
   "confirm_slip_payment_and_admin_override_enqueue_face",
   "only_confirm_slip_payment_enqueues_slip",
