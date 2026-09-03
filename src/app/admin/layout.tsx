@@ -1,27 +1,11 @@
-import Link from "next/link";
-import { requireAdmin } from "@/lib/auth";
-import { signOut } from "./actions";
-import { AdminNav } from "./_components/AdminNav";
+import { AdminShell } from "./_components/AdminShell";
 
-export default async function AdminLayout({
+export default function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  await requireAdmin();
-  return (
-    <div className="admin-shell">
-      <aside className="admin-sidebar">
-        <Link href="/admin" className="admin-brand"><span className="admin-brand-mark">ม</span><span>หมอแจว<small>Backoffice</small></span></Link>
-        <p className="admin-nav-label">จัดการระบบ</p>
-        <AdminNav />
-        <form action={signOut} className="admin-signout"><button type="submit">ออกจากระบบ</button></form>
-      </aside>
-      <header className="admin-mobile-header">
-        <Link href="/admin" className="admin-brand"><span className="admin-brand-mark">ม</span><span>หมอแจว <small>Backoffice</small></span></Link>
-        <AdminNav />
-      </header>
-      <main className="admin-main">{children}</main>
-    </div>
-  );
+  // /admin/login must remain reachable without auth. Every protected admin
+  // page and mutation action enforces its own server-side admin guard.
+  return <AdminShell>{children}</AdminShell>;
 }
