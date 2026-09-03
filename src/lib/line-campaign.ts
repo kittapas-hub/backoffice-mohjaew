@@ -80,6 +80,10 @@ export function replyToPostback(replyToken: string, segment: WaitingSegment, opt
   return postToLine("/message/reply", { replyToken, messages: [{ type: "text", text: WAITING_AUTO_REPLIES[segment] }] }, options);
 }
 
+export function replyToTextMessage(replyToken: string, text: string, options?: { fetch?: Fetch; accessToken?: string }): Promise<LineSendResult> {
+  return postToLine("/message/reply", { replyToken, messages: [{ type: "text", text }] }, options);
+}
+
 export function sendLineBroadcast(messages: LineTextMessage[], options: { fetch?: Fetch; accessToken?: string; retryKey?: string } = {}): Promise<LineSendResult> {
   return postToLine("/message/broadcast", { messages }, { ...options, retryKey: options.retryKey ?? crypto.randomUUID() });
 }

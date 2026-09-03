@@ -1,5 +1,6 @@
 import { verifyLineSignature } from "@/lib/line";
-import { replyToPostback } from "@/lib/line-campaign";
+import { replyToPostback, replyToTextMessage } from "@/lib/line-campaign";
+import { hashLineUatPairingCode } from "@/lib/line-uat-pairing";
 import { handleLineWebhookRequest } from "@/lib/line-webhook";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
@@ -17,5 +18,20 @@ export async function POST(req: Request) {
       if (error) throw new Error("line_segment_persistence_failed");
     },
     reply: replyToPostback,
+    async completePairing({ code, lineUserId, pairedAt }) {
+      const { data, error } = await supabaseAdmin()
+        .from("line_uat_pairings")
+        .update({ line_user_id: lineUserId, paired_at: pairedAt })
+        .eq("code_hash", hashLineUatPairingCode(code))
+        .gt("expires_at", pairedAt)
+        .is("line_user_id", null)
+        .select("id")
+        .maybeSingle();
+      if (error) throw new Error("line_uat_pairing_failed");
+      return Boolean(data);
+    },
+    replyPairing(replyToken) {
+      return replyToTextMessage(replyToken, "เชื่อมบัญชี LINE สำหรับทดสอบ UAT สำเร็จแล้วค่ะ กลับไปที่ Backoffice เพื่อส่งข้อความทดสอบได้เลย");
+    },
   });
 }

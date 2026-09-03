@@ -32,9 +32,10 @@ export default async function LineDashboard() {
         <div className="mt-3 grid grid-cols-3 gap-2">{WAITING_SEGMENTS.map((segment) => <div key={segment} className="rounded-lg bg-gray-50 p-3"><p className="break-all text-[11px] text-gray-500">{segment}</p><p className="mt-1 text-2xl font-bold">{counts[segment]}</p></div>)}</div>
       </section>
     </div>
-    <div className="mt-5 grid gap-4 sm:grid-cols-2">
+    <div className="mt-5 grid gap-4 sm:grid-cols-3">
       <Link href="/admin/line/broadcast" className="rounded-xl border border-rose-200 bg-rose-50 p-5 font-bold text-rose-800">สร้าง Broadcast →</Link>
       <Link href="/admin/line/audience" className="rounded-xl border border-gray-200 bg-white p-5 font-bold">ดู Audience →</Link>
+      <Link href="/admin/line/uat" className="rounded-xl border border-gray-200 bg-white p-5 font-bold">ตั้งค่า UAT →</Link>
     </div>
     <section className="mt-6 rounded-xl border border-gray-200 bg-white p-5"><h2 className="font-bold">Campaign run ล่าสุด</h2>
       {runResult.error ? <p className="mt-3 text-sm text-gray-500">ยังไม่มีประวัติที่อ่านได้</p> : runs.length ? <div className="mt-3 divide-y divide-gray-100">{runs.map((run) => <div key={run.id} className="flex items-start justify-between gap-4 py-3 text-sm"><div><p className="line-clamp-1 font-medium">{run.message_text}</p><p className="text-xs text-gray-500">{run.mode.toUpperCase()} · {new Date(run.created_at).toLocaleString("th-TH")}</p></div><span className={run.status === "success" ? "text-green-700" : "text-red-700"}>{run.status}</span></div>)}</div> : <p className="mt-3 text-sm text-gray-500">ยังไม่มีประวัติการส่ง</p>}

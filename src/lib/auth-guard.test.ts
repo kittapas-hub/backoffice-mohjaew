@@ -9,11 +9,15 @@ import { dirname, join } from "node:path";
 
 const appDir = join(dirname(fileURLToPath(import.meta.url)), "..", "app");
 
+const layout = readFileSync(join(appDir, "admin/layout.tsx"), "utf8");
+assert.match(layout, /await requireAdmin\(\)/, "admin/layout.tsx must await requireAdmin()");
+
 // Admin pages must call requireAdmin().
 const pages = [
   "admin/page.tsx",
   "admin/bookings/[id]/page.tsx",
   "admin/day/page.tsx",
+  "admin/line/uat/page.tsx",
 ];
 for (const p of pages) {
   const src = readFileSync(join(appDir, p), "utf8");
@@ -31,6 +35,8 @@ function fnBody(src: string, name: string): string {
 const actionFiles: Record<string, string[]> = {
   "admin/actions.ts": ["updateStatus", "transitionSlotBooking", "confirmPayment", "confirmBookingOverride"],
   "admin/day/actions.ts": ["seedDaySlots", "updateSlotCapacity", "toggleSlot"],
+  "admin/line/uat/actions.ts": ["createUatPairingCode"],
+  "admin/line/broadcast/actions.ts": ["sendUat", "sendLive", "draftWithAi"],
 };
 
 for (const [file, names] of Object.entries(actionFiles)) {

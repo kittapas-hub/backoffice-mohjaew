@@ -1,17 +1,35 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { draftWithAi, sendLive, sendUat, type AiState, type SendState } from "./actions";
 
 const initialSend: SendState = { kind: "idle", message: "" };
 const initialAi: AiState = { kind: "idle", message: "", drafts: [] };
 const choices = ["1️⃣ รอคำตอบ", "2️⃣ รอหลายเรื่อง", "3️⃣ สำเร็จแล้วเงียบ"];
 
-export function BroadcastComposer({ liveEnabled, aiConfigured }: { liveEnabled: boolean; aiConfigured: boolean }) {
+export function BroadcastComposer({ liveEnabled, aiConfigured, initialLiveRequestKey }: { liveEnabled: boolean; aiConfigured: boolean; initialLiveRequestKey: string }) {
   const [messageText, setMessageText] = useState("");
   const [sendState, sendAction, sending] = useActionState(sendUat, initialSend);
   const [liveState, liveAction, liveSending] = useActionState(sendLive, initialSend);
   const [aiState, aiAction, drafting] = useActionState(draftWithAi, initialAi);
+  const [liveRequestKey, setLiveRequestKey] = useState(initialLiveRequestKey);
+  const [confirmation, setConfirmation] = useState("");
+  const [liveResultVisible, setLiveResultVisible] = useState(true);
+
+  useEffect(() => {
+    if (liveState.kind !== "idle") {
+      setConfirmation("");
+      setLiveResultVisible(true);
+    }
+  }, [liveState]);
+
+  const startNewBroadcast = () => {
+    setLiveRequestKey(crypto.randomUUID());
+    setConfirmation("");
+    setLiveResultVisible(false);
+  };
+
+  const liveLocked = liveState.liveDisposition === "locked" || liveState.liveDisposition === "new_allowed";
 
   return <div className="grid gap-6 lg:grid-cols-[1.15fr_.85fr]">
     <div className="space-y-6">
@@ -35,13 +53,18 @@ export function BroadcastComposer({ liveEnabled, aiConfigured }: { liveEnabled: 
 
       {liveEnabled ? <section className="rounded-xl border border-red-200 bg-red-50 p-5">
         <h2 className="font-bold text-red-900">Live broadcast</h2>
-        <p className="mt-1 text-sm text-red-800">พิมพ์ BROADCAST เพื่อยืนยันการส่งถึงผู้ติดตามจริง</p>
+        <p className="mt-1 text-sm text-red-800">ส่งถึงเพื่อนของ LINE OA ทุกคนที่มีสิทธิ์รับ Broadcast ณ เวลาส่ง ไม่ได้ส่งเฉพาะกลุ่ม WAIT_*</p>
+        <p className="mt-1 text-xs text-red-700">WAIT_ANSWER, WAIT_MULTIPLE และ WAIT_STALLED ใช้เพื่อวิเคราะห์ผลใน Phase 1 เท่านั้น ไม่ใช่กลุ่มเป้าหมาย</p>
+        <p className="mt-2 text-sm text-red-800">พิมพ์ BROADCAST เพื่อยืนยันการส่งถึงผู้ติดตามจริง</p>
         <form action={liveAction} className="mt-3 flex flex-wrap gap-2">
           <input type="hidden" name="messageText" value={messageText} />
-          <input name="confirmation" className="rounded-lg border border-red-300 px-3 py-2 text-sm" autoComplete="off" />
-          <button disabled={liveSending || !messageText.trim()} className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">ส่ง Live</button>
+          <input type="hidden" name="requestKey" value={liveRequestKey} />
+          <input name="confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} disabled={liveLocked || liveSending} className="rounded-lg border border-red-300 px-3 py-2 text-sm disabled:opacity-50" autoComplete="off" />
+          <button disabled={liveSending || liveLocked || !messageText.trim()} className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{liveSending ? "กำลังส่ง…" : "ส่ง Live"}</button>
         </form>
-        {liveState.message && <Status kind={liveState.kind} message={liveState.message} />}
+        {liveResultVisible && liveState.message && <Status kind={liveState.kind} message={liveState.message} />}
+        {liveState.liveDisposition === "new_allowed" && <button type="button" onClick={startNewBroadcast} className="mt-3 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-800">เริ่ม Broadcast ใหม่</button>}
+        {liveState.liveDisposition === "locked" && <p className="mt-3 text-sm font-semibold text-red-900">รายการนี้ถูกล็อกเพื่อป้องกันการส่งซ้ำ โปรดตรวจสอบประวัติและ LINE ก่อนออกจากหน้านี้</p>}
       </section> : <p className="text-sm text-gray-500">Live broadcast ปิดอยู่ (ค่าเริ่มต้นเพื่อความปลอดภัย)</p>}
     </div>
 

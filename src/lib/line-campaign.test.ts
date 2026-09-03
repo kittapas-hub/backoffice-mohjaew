@@ -32,16 +32,28 @@ function request(body: unknown, signature = "valid") {
 
 let persisted = 0;
 let replied = 0;
+let pairingValue: unknown;
 const dependencies = {
   verifySignature: (_body: string, signature: string | null) => signature === "valid",
   persistSelection: async () => { persisted += 1; },
   reply: async () => { replied += 1; },
+  completePairing: async () => false,
+  replyPairing: async () => {},
 };
 
 assert.equal((await handleLineWebhookRequest(request({ events: [] }, "invalid"), dependencies)).status, 401);
+assert.equal((await handleLineWebhookRequest(request({ events: [{
+  type: "message", source: { type: "user", userId: `U${"a".repeat(32)}` },
+  message: { type: "text", text: "MJ-UAT-ABCD1234" }, replyToken: "invalid-signature-reply",
+}] }, "invalid"), {
+  ...dependencies,
+  completePairing: async (value) => { pairingValue = value; return true; },
+})).status, 401);
+assert.equal(pairingValue, undefined, "unverified webhook events must not pair a user");
 const unrelated = await handleLineWebhookRequest(request({ events: [
   { type: "message", source: { type: "user", userId: `U${"a".repeat(32)}` } },
   { type: "postback", source: { type: "group", userId: `U${"b".repeat(32)}` }, postback: { data: postbackData("WAIT_ANSWER") }, replyToken: "reply-1" },
+  { type: "message", source: { type: "group", userId: `U${"b".repeat(32)}` }, message: { type: "text", text: "MJ-UAT-ABCD1234" }, replyToken: "group-pair-reply" },
 ] }), dependencies);
 assert.equal(unrelated.status, 200);
 assert.equal(persisted, 0);
@@ -59,6 +71,8 @@ const valid = await handleLineWebhookRequest(request({ events: [{
   verifySignature: () => true,
   persistSelection: async (value) => { persistedValue = value; },
   reply: async (replyToken, segment) => { replyValue = { replyToken, segment }; },
+  completePairing: async () => false,
+  replyPairing: async () => {},
 });
 assert.equal(valid.status, 200);
 assert.deepEqual(persistedValue, { lineUserId: `U${"c".repeat(32)}`, campaign: "september_waiting", segment: "WAIT_STALLED", createdAt: "2023-11-14T22:13:20.000Z" });
@@ -70,7 +84,37 @@ const replyFailure = await handleLineWebhookRequest(request({ events: [{
   verifySignature: () => true,
   persistSelection: async () => {},
   reply: async () => { throw new Error("simulated failure"); },
+  completePairing: async () => false,
+  replyPairing: async () => {},
 });
 assert.equal(replyFailure.status, 200);
+
+let pairingReplyToken: unknown;
+const paired = await handleLineWebhookRequest(request({ events: [{
+  type: "message", source: { type: "user", userId: `U${"e".repeat(32)}` },
+  message: { type: "text", text: "MJ-UAT-ABCD1234" }, replyToken: "pair-reply",
+}] }), {
+  ...dependencies,
+  completePairing: async (value) => { pairingValue = value; return true; },
+  replyPairing: async (replyToken) => { pairingReplyToken = replyToken; },
+});
+assert.equal(paired.status, 200);
+assert.equal(typeof (pairingValue as { pairedAt: string }).pairedAt, "string");
+assert.deepEqual({ ...(pairingValue as Record<string, unknown>), pairedAt: "timestamp" }, { code: "MJ-UAT-ABCD1234", lineUserId: `U${"e".repeat(32)}`, pairedAt: "timestamp" });
+assert.equal(pairingReplyToken, "pair-reply");
+
+pairingReplyToken = undefined;
+await handleLineWebhookRequest(request({ events: [{
+  type: "message", source: { type: "user", userId: `U${"e".repeat(32)}` },
+  message: { type: "text", text: "MJ-UAT-EXPIRED1" }, replyToken: "expired-reply",
+}] }), { ...dependencies, completePairing: async () => false, replyPairing: async (replyToken) => { pairingReplyToken = replyToken; } });
+assert.equal(pairingReplyToken, undefined, "expired or already-paired codes must not receive a revealing reply");
+
+pairingValue = undefined;
+await handleLineWebhookRequest(request({ events: [{
+  type: "message", source: { type: "user", userId: `U${"f".repeat(32)}` },
+  message: { type: "text", text: "MJ-UAT-abcd1234" }, replyToken: "no-reply",
+}] }), { ...dependencies, completePairing: async (value) => { pairingValue = value; return true; } });
+assert.equal(pairingValue, undefined);
 
 console.log("LINE campaign self-check passed");
