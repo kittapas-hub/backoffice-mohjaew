@@ -3,7 +3,7 @@
 import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { APP_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/env";
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/env";
 
 const CALLBACK_ERRORS: Record<string, string> = {
   otp_expired: "ลิงก์หมดอายุหรือถูกใช้แล้ว กรุณาขอลิงก์ใหม่",
@@ -29,7 +29,9 @@ function LoginForm() {
     setLoading(true);
     setError(null);
     const supabase = supabaseBrowser();
-    const origin = APP_URL || window.location.origin;
+    // Use the host the admin is actually visiting. This keeps Preview magic
+    // links on Preview instead of forcing them back to the production domain.
+    const origin = window.location.origin;
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
       options: { emailRedirectTo: `${origin}/auth/callback?next=/admin` },
