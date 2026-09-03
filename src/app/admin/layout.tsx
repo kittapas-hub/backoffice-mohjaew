@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
+import { signOut } from "./actions";
+import { AdminNav } from "./_components/AdminNav";
 
 export default async function AdminLayout({
   children,
@@ -8,20 +10,18 @@ export default async function AdminLayout({
 }) {
   await requireAdmin();
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <Link href="/admin" className="font-bold">
-            หมอแจว Backoffice
-          </Link>
-          <nav className="flex flex-wrap items-center gap-4 text-sm" aria-label="เมนูผู้ดูแล">
-            <Link href="/admin" className="text-gray-600 hover:text-gray-950">การจอง</Link>
-            <Link href="/admin/day" className="text-gray-600 hover:text-gray-950">ตารางคิว</Link>
-            <Link href="/admin/line" className="font-medium text-rose-600 hover:text-rose-800">LINE Marketing</Link>
-          </nav>
-        </div>
+    <div className="admin-shell">
+      <aside className="admin-sidebar">
+        <Link href="/admin" className="admin-brand"><span className="admin-brand-mark">ม</span><span>หมอแจว<small>Backoffice</small></span></Link>
+        <p className="admin-nav-label">จัดการระบบ</p>
+        <AdminNav />
+        <form action={signOut} className="admin-signout"><button type="submit">ออกจากระบบ</button></form>
+      </aside>
+      <header className="admin-mobile-header">
+        <Link href="/admin" className="admin-brand"><span className="admin-brand-mark">ม</span><span>หมอแจว <small>Backoffice</small></span></Link>
+        <AdminNav />
       </header>
-      <main className="mx-auto max-w-5xl px-6 py-8">{children}</main>
+      <main className="admin-main">{children}</main>
     </div>
   );
 }

@@ -12,7 +12,7 @@ export function SearchForm({
   status: string | null;
 }) {
   return (
-    <form method="get" action="/admin" className="flex items-center gap-2">
+    <form method="get" action="/admin" className="flex flex-col gap-2 sm:flex-row sm:items-center">
       {status && <input type="hidden" name="status" value={status} />}
       <div className="relative flex-1">
         <input
@@ -21,7 +21,7 @@ export function SearchForm({
           defaultValue={defaultValue}
           placeholder="ค้นหาชื่อเล่น / เบอร์โทร / เลขอ้างอิง"
           autoComplete="off"
-          className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 focus:border-gray-400 focus:outline-none"
+          className="admin-focus w-full rounded-xl border border-[#dfd3d0] bg-white py-2.5 pl-10 pr-3 text-sm placeholder:text-gray-400 focus:border-rose-400 focus:outline-none"
         />
         <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-gray-400 text-sm">
           🔍
@@ -29,14 +29,14 @@ export function SearchForm({
       </div>
       <button
         type="submit"
-        className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm hover:bg-gray-50"
+        className="admin-focus rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800"
       >
         ค้นหา
       </button>
       {defaultValue && (
         <Link
           href={clearHref}
-          className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-500 hover:bg-gray-50"
+          className="admin-focus rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-center text-sm text-gray-600 hover:bg-gray-50"
         >
           ล้าง
         </Link>

@@ -19,16 +19,16 @@ export default async function LineUatPage() {
   const target = await resolveLineUatTarget(process.env.LINE_UAT_USER_ID, async () => data?.line_user_id);
 
   return <div>
-    <div className="mb-6 flex items-center justify-between">
-      <div><p className="text-sm text-rose-600">LINE Marketing</p><h1 className="text-2xl font-bold">ตั้งค่าบัญชี UAT</h1></div>
+    <div className="admin-page-header">
+      <div><p className="admin-eyebrow">LINE Marketing</p><h1 className="admin-title">ตั้งค่าบัญชี UAT</h1><p className="admin-description">เชื่อมบัญชีทดสอบอย่างปลอดภัยก่อนส่ง Broadcast</p></div>
       <Link href="/admin/line" className="text-sm text-gray-500">← Dashboard</Link>
     </div>
-    <section className="rounded-xl border border-gray-200 bg-white p-5">
+    <section className="admin-card p-5 sm:p-6">
       <h2 className="font-bold">สถานะ</h2>
       <p className={`mt-2 text-sm font-semibold ${target ? "text-green-700" : "text-amber-700"}`}>{target ? "พร้อมทดสอบ" : "ยังไม่พร้อมทดสอบ"}</p>
       <p className="mt-1 text-sm text-gray-500">{target ? "มีบัญชี LINE สำหรับรับข้อความ UAT แล้ว (ซ่อน LINE user ID)" : pairingAvailable ? "สร้างรหัสด้านล่าง แล้วส่งจากบัญชี LINE ที่ต้องการใช้ทดสอบ" : "การ Pair ยังใช้ไม่ได้จนกว่าจะใช้ migration 0016"}</p>
     </section>
-    <section className="mt-5 rounded-xl border border-gray-200 bg-white p-5">
+    <section className="admin-card mt-5 p-5 sm:p-6">
       <h2 className="font-bold">เชื่อมบัญชี LINE</h2>
       <p className="mb-4 mt-1 text-sm text-gray-500">รหัสไม่ถูกเก็บเป็นข้อความปกติ และหมดอายุใน 10 นาที</p>
       {pairingAvailable ? <PairingForm /> : <p className="text-sm text-amber-700">กรุณาใช้ migration 0016 ก่อนสร้างรหัส Pair</p>}
