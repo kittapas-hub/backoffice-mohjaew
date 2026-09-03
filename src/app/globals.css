@@ -28,6 +28,37 @@ body {
     sans-serif;
 }
 
+.admin-shell { min-height: 100vh; background: #f7f4f2; }
+.admin-sidebar { display: none; }
+.admin-mobile-header { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid #eadfdc; background: rgba(255,255,255,.94); padding: 12px 16px 0; backdrop-filter: blur(14px); }
+.admin-brand { display: flex; align-items: center; gap: 10px; color: #271f21; font-size: 15px; font-weight: 800; text-decoration: none; }
+.admin-brand small { display: block; color: #8c797e; font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.admin-brand-mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 11px; background: linear-gradient(145deg,#c33d61,#9e294a); color: white; box-shadow: 0 7px 18px rgba(158,41,74,.22); }
+.admin-nav { display: flex; gap: 6px; overflow-x: auto; padding: 10px 0; scrollbar-width: none; }
+.admin-nav-link { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; border-radius: 10px; padding: 9px 11px; color: #6f6265; font-size: 13px; font-weight: 650; text-decoration: none; transition: 150ms ease; }
+.admin-nav-link:hover { background: #fff1f3; color: #9f2443; }
+.admin-nav-link[data-active] { background: #fbe8ed; color: #a42b4c; box-shadow: inset 3px 0 #be3455; }
+.admin-nav-icon { width: 18px; text-align: center; }
+.admin-main { width: 100%; max-width: 1440px; margin: 0 auto; padding: 24px 16px 48px; }
+.admin-page-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.admin-eyebrow { color: #ad3152; font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.admin-title { margin-top: 4px; color: #261e20; font-size: clamp(24px,3vw,32px); font-weight: 800; letter-spacing: -.025em; }
+.admin-description { margin-top: 5px; color: #74676a; font-size: 14px; }
+.admin-card { border: 1px solid #e9dfdc; border-radius: 18px; background: white; box-shadow: 0 8px 28px rgba(67,45,51,.055); }
+.admin-focus:focus-visible { outline: 3px solid rgba(190,52,85,.25); outline-offset: 2px; }
+.admin-signout { margin-top: auto; border-top: 1px solid #eee4e2; padding-top: 18px; }
+.admin-signout button { width: 100%; border: 0; border-radius: 10px; background: transparent; padding: 10px 12px; color: #75676a; text-align: left; cursor: pointer; }
+.admin-signout button:hover { background: #f8eeee; color: #9f2443; }
+@media (min-width: 900px) {
+  .admin-shell { display: grid; grid-template-columns: 236px minmax(0,1fr); }
+  .admin-sidebar { position: sticky; top: 0; display: flex; height: 100vh; flex-direction: column; border-right: 1px solid #eadfdc; background: #fffdfc; padding: 24px 18px 18px; }
+  .admin-sidebar .admin-brand { padding: 0 8px 27px; }
+  .admin-nav-label { margin: 0 11px 7px; color: #a39296; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+  .admin-sidebar .admin-nav { flex-direction: column; overflow: visible; padding: 0; }
+  .admin-mobile-header { display: none; }
+  .admin-main { padding: 38px clamp(28px,4vw,56px) 64px; }
+}
+
 .booking-page {
   min-height: 100vh;
   padding: 28px 16px 44px;

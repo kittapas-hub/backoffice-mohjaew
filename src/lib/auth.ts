@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { supabaseServer } from "@/lib/supabase/server";
 import { isAdminEmail } from "@/lib/env";
 
 // Guard for admin server components/actions. Redirects non-admins to login.
-export async function requireAdmin() {
+export const requireAdmin = cache(async function requireAdmin() {
   const supabase = await supabaseServer();
   const {
     data: { user },
@@ -16,4 +17,4 @@ export async function requireAdmin() {
     redirect("/admin/login?error=unauthorized");
   }
   return user;
-}
+});

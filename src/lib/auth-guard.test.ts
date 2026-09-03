@@ -10,13 +10,23 @@ import { dirname, join } from "node:path";
 const appDir = join(dirname(fileURLToPath(import.meta.url)), "..", "app");
 
 const layout = readFileSync(join(appDir, "admin/layout.tsx"), "utf8");
-assert.match(layout, /await requireAdmin\(\)/, "admin/layout.tsx must await requireAdmin()");
+assert.doesNotMatch(
+  layout,
+  /requireAdmin\(\)/,
+  "admin/layout.tsx must not guard /admin/login or it will redirect-loop",
+);
 
-// Admin pages must call requireAdmin().
+const loginPage = readFileSync(join(appDir, "admin/login/page.tsx"), "utf8");
+assert.doesNotMatch(loginPage, /requireAdmin\(\)/, "admin/login must remain public");
+
+// Every protected admin page must call requireAdmin().
 const pages = [
   "admin/page.tsx",
   "admin/bookings/[id]/page.tsx",
   "admin/day/page.tsx",
+  "admin/line/page.tsx",
+  "admin/line/audience/page.tsx",
+  "admin/line/broadcast/page.tsx",
   "admin/line/uat/page.tsx",
 ];
 for (const p of pages) {

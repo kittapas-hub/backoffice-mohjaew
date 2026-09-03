@@ -38,38 +38,28 @@ export default async function BookingDetail({
       : null;
 
   const db = supabaseAdmin();
-  const { data: booking } = await db
-    .from("bookings")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
-  if (!booking) notFound();
-
-  const [{ data: images }, paymentOrders] = await Promise.all([
+  const [{ data: booking }, { data: images }, paymentOrders] = await Promise.all([
+    db.from("bookings").select("*").eq("id", id).maybeSingle(),
     db.from("booking_images").select("storage_path").eq("booking_id", id),
     getPaymentOrdersForBooking(id),
   ]);
+  if (!booking) notFound();
 
   // Short-lived signed URLs for the private bucket (5 minutes).
-  const signedUrls: string[] = [];
-  for (const img of images ?? []) {
-    const { data } = await db.storage
-      .from("booking-faces")
-      .createSignedUrl(img.storage_path, 300);
-    if (data?.signedUrl) signedUrls.push(data.signedUrl);
-  }
+  const signedUrlResults = await Promise.all((images ?? []).map((img) => db.storage.from("booking-faces").createSignedUrl(img.storage_path, 300)));
+  const signedUrls = signedUrlResults.flatMap(({ data }) => data?.signedUrl ? [data.signedUrl] : []);
 
   const latestOrder: PaymentOrder | undefined = paymentOrders[0];
   const isUnscheduledLine = booking.source === "line" && !booking.slot_id;
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-5xl">
       <Link href="/admin" className="text-sm text-gray-500 hover:text-gray-900">
         ← กลับ
       </Link>
 
-      <div className="mt-4 flex items-center justify-between">
-        <h1 className="text-xl font-bold">{booking.nickname}</h1>
+      <div className="admin-page-header mt-4">
+        <div><p className="admin-eyebrow">Booking #{booking.id.slice(0, 8).toUpperCase()}</p><h1 className="admin-title">{booking.nickname}</h1><p className="admin-description">รายละเอียดลูกค้า การชำระเงิน และสถานะคิว</p></div>
         <div className="text-right">
           <StatusBadge status={booking.status} />
           {isUnscheduledLine && (
@@ -86,7 +76,7 @@ export default async function BookingDetail({
         </div>
       )}
 
-      <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-4 rounded-lg border border-gray-200 bg-white p-6 sm:grid-cols-2">
+      <dl className="admin-card mt-6 grid grid-cols-1 gap-x-8 gap-y-5 p-6 sm:grid-cols-2 lg:grid-cols-3">
         <Field label="ชื่อเล่น" value={booking.nickname} />
         <Field label="ชื่อ LINE" value={booking.line_display_name} />
         <Field label="เบอร์โทร" value={booking.phone} />
@@ -102,7 +92,7 @@ export default async function BookingDetail({
       {latestOrder && (
         <section className="mt-6">
           <h2 className="mb-2 font-semibold">ข้อมูลการชำระเงิน</h2>
-          <dl className="grid grid-cols-1 gap-x-6 gap-y-4 rounded-lg border border-gray-200 bg-white p-6 sm:grid-cols-2">
+          <dl className="admin-card grid grid-cols-1 gap-x-6 gap-y-4 p-6 sm:grid-cols-2">
             <Field
               label="สถานะชำระเงิน"
               value={
@@ -147,7 +137,7 @@ export default async function BookingDetail({
         </section>
       )}
 
-      <section className="mt-6">
+      <section className="admin-card mt-6 p-6">
         <h2 className="mb-2 font-semibold">รูปหน้าตรง</h2>
         {signedUrls.length === 0 ? (
           <p className="text-sm text-gray-400">ไม่มีรูป</p>
@@ -166,7 +156,7 @@ export default async function BookingDetail({
         )}
       </section>
 
-      <section className="mt-6">
+      <section className="admin-card mt-6 p-6">
         <h2 className="mb-2 font-semibold">เปลี่ยนสถานะ</h2>
         {booking.slot_id ? (
           // Slot booking: only valid transitions, via the state machine.
@@ -248,8 +238,8 @@ export default async function BookingDetail({
 function Field({ label, value }: { label: string; value: string | null }) {
   return (
     <div>
-      <dt className="text-xs text-gray-500">{label}</dt>
-      <dd className="mt-0.5 text-sm">{value ?? "-"}</dd>
+      <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</dt>
+      <dd className="mt-1 text-sm font-medium text-gray-900">{value ?? "-"}</dd>
     </div>
   );
 }

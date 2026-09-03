@@ -86,8 +86,8 @@ export default async function DayView({
 
   return (
     <div>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">ตารางคิวรายวัน</h1>
+      <div className="admin-page-header">
+        <div><p className="admin-eyebrow">Daily operations</p><h1 className="admin-title">ตารางคิวรายวัน</h1><p className="admin-description">ดูจำนวนคิวและจัดการรอบเซสชันของแต่ละวัน</p></div>
         <div className="flex flex-wrap items-center gap-3">
           {slots && slots.length > 0 && (
             <form action={seedDaySlots}>
@@ -114,7 +114,7 @@ export default async function DayView({
         </div>
       )}
 
-      <form method="get" className="mb-6 flex items-center gap-2">
+      <form method="get" className="admin-card mb-6 flex flex-wrap items-center gap-2 p-4">
         <input
           type="date"
           name="date"
@@ -145,7 +145,7 @@ export default async function DayView({
           return (
             <section
               key={slot.id}
-              className="overflow-hidden rounded-lg border border-gray-200 bg-white"
+              className="admin-card overflow-hidden"
             >
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 bg-gray-50 px-4 py-3">
                 <div>
@@ -186,7 +186,7 @@ export default async function DayView({
               {list.length === 0 ? (
                 <p className="px-4 py-4 text-sm text-gray-400">ยังไม่มีผู้จอง</p>
               ) : (
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm">
                   <thead className="text-left text-gray-500">
                     <tr>
                       <th className="px-4 py-2">คิว</th>
@@ -254,7 +254,7 @@ export default async function DayView({
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               )}
             </section>
           );

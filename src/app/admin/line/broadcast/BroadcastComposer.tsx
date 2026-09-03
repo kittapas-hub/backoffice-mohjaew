@@ -31,27 +31,30 @@ export function BroadcastComposer({ liveEnabled, aiConfigured, initialLiveReques
 
   const liveLocked = liveState.liveDisposition === "locked" || liveState.liveDisposition === "new_allowed";
 
-  return <div className="grid gap-6 lg:grid-cols-[1.15fr_.85fr]">
+  const isLong = messageText.length >= 800;
+
+  return <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.08fr)_minmax(360px,.92fr)]">
     <div className="space-y-6">
-      <section className="rounded-xl border border-gray-200 bg-white p-5">
+      <section className="admin-card p-5 sm:p-6">
         <p className="text-xs font-semibold uppercase tracking-wide text-rose-600">Campaign: september_waiting</p>
         <label className="mt-4 block text-sm font-semibold" htmlFor="messageText">ข้อความ Broadcast</label>
-        <textarea id="messageText" value={messageText} onChange={(event) => setMessageText(event.target.value)} rows={7} maxLength={5000} className="mt-2 w-full rounded-lg border border-gray-300 p-3 text-sm" placeholder="เขียนข้อความที่ต้องการส่ง…" />
-        <div className="mt-2 flex justify-between text-xs text-gray-500"><span>Quick reply 3 ตัวเลือกจะถูกแนบอัตโนมัติ</span><span>{messageText.length}/5,000</span></div>
+        <textarea id="messageText" value={messageText} onChange={(event) => setMessageText(event.target.value)} rows={9} maxLength={5000} className="admin-focus mt-2 w-full resize-y rounded-xl border border-[#dfd3d0] p-4 text-base leading-7" placeholder="เขียนข้อความที่ต้องการส่ง…" />
+        <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs text-gray-500"><span>Quick reply 3 ตัวเลือกจะถูกแนบอัตโนมัติ</span><span className={isLong ? "font-bold text-amber-700" : ""}>{messageText.length.toLocaleString()}/5,000</span></div>
+        {isLong ? <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">ข้อความเกิน ~800 ตัวอักษร อาจอ่านยากบนมือถือ ลองย่อใจความสำคัญให้กระชับขึ้น</p> : null}
         <form action={sendAction} className="mt-4">
           <input type="hidden" name="messageText" value={messageText} />
-          <button disabled={sending || !messageText.trim()} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{sending ? "กำลังส่ง…" : "ส่งทดสอบ (UAT)"}</button>
+          <button disabled={sending || !messageText.trim()} className="admin-focus w-full rounded-xl bg-rose-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-rose-200 hover:bg-rose-700 disabled:shadow-none disabled:opacity-50">{sending ? "กำลังส่ง…" : "ส่งทดสอบ (UAT)"}</button>
           <p className="mt-2 text-xs text-gray-500">ส่งเฉพาะบัญชี UAT ที่ตั้งค่าไว้ ไม่แสดง LINE user ID บนหน้านี้</p>
           {sendState.message && <Status kind={sendState.kind} message={sendState.message} />}
         </form>
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5">
+      <section className="admin-card p-5">
         <h2 className="font-bold">Estimated message usage</h2>
         <p className="mt-2 text-sm text-gray-600">UAT: 1 ข้อความต่อการทดสอบ · Live: จำนวนผู้รับจริงจะขึ้นกับ LINE ณ เวลาส่ง</p>
       </section>
 
-      {liveEnabled ? <section className="rounded-xl border border-red-200 bg-red-50 p-5">
+      {liveEnabled ? <section className="rounded-2xl border border-red-300 bg-red-50 p-5 shadow-sm">
         <h2 className="font-bold text-red-900">Live broadcast</h2>
         <p className="mt-1 text-sm text-red-800">ส่งถึงเพื่อนของ LINE OA ทุกคนที่มีสิทธิ์รับ Broadcast ณ เวลาส่ง ไม่ได้ส่งเฉพาะกลุ่ม WAIT_*</p>
         <p className="mt-1 text-xs text-red-700">WAIT_ANSWER, WAIT_MULTIPLE และ WAIT_STALLED ใช้เพื่อวิเคราะห์ผลใน Phase 1 เท่านั้น ไม่ใช่กลุ่มเป้าหมาย</p>
@@ -65,19 +68,20 @@ export function BroadcastComposer({ liveEnabled, aiConfigured, initialLiveReques
         {liveResultVisible && liveState.message && <Status kind={liveState.kind} message={liveState.message} />}
         {liveState.liveDisposition === "new_allowed" && <button type="button" onClick={startNewBroadcast} className="mt-3 rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-800">เริ่ม Broadcast ใหม่</button>}
         {liveState.liveDisposition === "locked" && <p className="mt-3 text-sm font-semibold text-red-900">รายการนี้ถูกล็อกเพื่อป้องกันการส่งซ้ำ โปรดตรวจสอบประวัติและ LINE ก่อนออกจากหน้านี้</p>}
-      </section> : <p className="text-sm text-gray-500">Live broadcast ปิดอยู่ (ค่าเริ่มต้นเพื่อความปลอดภัย)</p>}
+      </section> : <section className="rounded-2xl border border-dashed border-gray-300 bg-gray-100/70 p-5"><div className="flex items-center gap-2"><span aria-hidden="true">🔒</span><h2 className="font-bold text-gray-700">Live broadcast ปิดอยู่</h2></div><p className="mt-2 text-sm text-gray-500">ค่าเริ่มต้นเพื่อความปลอดภัย ไม่สามารถส่งถึงผู้ติดตามจริงจากหน้านี้</p></section>}
     </div>
 
     <div className="space-y-6">
-      <section className="rounded-xl border border-gray-200 bg-white p-5">
-        <h2 className="font-bold">Preview</h2>
-        <div className="mt-4 rounded-2xl bg-[#dce8e5] p-4">
-          <div className="rounded-xl bg-white p-3 text-sm leading-6 shadow-sm">{messageText || "ข้อความของคุณจะแสดงที่นี่"}</div>
-          <div className="mt-3 grid gap-2">{choices.map((choice) => <div key={choice} className="rounded-lg bg-white px-3 py-2 text-center text-xs font-medium text-sky-700">{choice}</div>)}</div>
+      <section className="admin-card p-5 sm:p-6 xl:sticky xl:top-8">
+        <div className="flex items-center justify-between"><div><p className="admin-eyebrow">Mobile preview</p><h2 className="mt-1 font-bold">ตัวอย่างใน LINE</h2></div><span className="h-2.5 w-2.5 rounded-full bg-green-500" title="Preview ready" /></div>
+        <div className="mx-auto mt-5 max-w-[390px] overflow-hidden rounded-[30px] border-[7px] border-[#272329] bg-[#d8e6e4] shadow-xl">
+          <div className="bg-[#708b87] px-4 py-3 text-center text-sm font-bold text-white">หมอแจว</div>
+          <div className="min-h-[330px] p-4"><div className="mb-2 text-center text-[10px] text-gray-500">วันนี้</div><div className="mr-8 whitespace-pre-wrap rounded-2xl rounded-tl-sm bg-white p-3 text-sm leading-6 shadow-sm">{messageText || "ข้อความของคุณจะแสดงที่นี่"}</div>
+          <div className="mr-8 mt-2 grid gap-1.5">{choices.map((choice) => <div key={choice} className="rounded-lg bg-white px-3 py-2.5 text-center text-xs font-semibold text-[#397c91] shadow-sm">{choice}</div>)}</div></div>
         </div>
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-5">
+      <section className="admin-card p-5 sm:p-6">
         <h2 className="font-bold">AI Campaign Assistant</h2>
         {!aiConfigured && <p className="mt-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">AI Assistant ยังไม่ได้ตั้งค่า</p>}
         <form action={aiAction} className="mt-4 space-y-3">
