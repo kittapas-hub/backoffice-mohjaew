@@ -16,6 +16,7 @@ import {
   isSlipUploadReady,
   resolvePaymentDeadline,
 } from "./pay-page-gate";
+import { CheckoutIcon, type CheckoutIconName } from "@/app/booking/success/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +63,7 @@ export default async function PayPage({
     return (
       <Centered
         tone="neutral"
-        icon="🔍"
+        icon="search"
         title="ไม่พบรายการชำระเงิน"
         subtitle="ลิงก์อาจหมดอายุหรือไม่ถูกต้อง"
       >
@@ -153,7 +154,7 @@ export default async function PayPage({
     return (
       <Centered
         tone="success"
-        icon="✅"
+        icon="check"
         title="ชำระเงินแล้ว"
         subtitle={paidSubtitle}
       >
@@ -179,7 +180,7 @@ export default async function PayPage({
     return (
       <Centered
         tone="review"
-        icon="🕓"
+        icon="clock"
         title="อยู่ระหว่างการตรวจสอบ"
         subtitle="ระบบได้รับสลิปของคุณแล้ว ทีมงานกำลังตรวจสอบการชำระเงินเพิ่มเติม"
       >
@@ -197,7 +198,7 @@ export default async function PayPage({
   // ── Expired / closed ─────────────────────────────────────────────────────
   if (isExpiredOrClosed) {
     return (
-      <Centered tone="neutral" icon="⏰" title="รายการหมดอายุ">
+      <Centered tone="neutral" icon="clock" title="รายการหมดอายุ">
         {summaryCard}
         <div className="checkout-alert" data-tone="neutral" style={{ marginTop: 16 }}>
           <p className="checkout-alert-title">รายการนี้หมดอายุแล้ว</p>
@@ -215,7 +216,7 @@ export default async function PayPage({
       <main className="checkout-page">
         <div className="checkout-shell checkout-shell-wide">
           <div className="checkout-hero">
-            <div className="checkout-badge">💳</div>
+            <div className="checkout-badge"><CheckoutIcon name="card" /></div>
             <h1 className="checkout-title">ชำระเงิน</h1>
             <p className="checkout-subtitle">
               โอนเงินแล้วอัปโหลดสลิปเพื่อยืนยันคิวของคุณ
@@ -293,7 +294,7 @@ function Centered({
   children,
 }: {
   tone?: "success" | "neutral" | "warn" | "review";
-  icon: string;
+  icon: CheckoutIconName;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
@@ -303,7 +304,7 @@ function Centered({
       <div className="checkout-shell" style={{ maxWidth: 460 }}>
         <div className="checkout-hero">
           <div className="checkout-badge" data-tone={tone}>
-            {icon}
+            <CheckoutIcon name={icon} />
           </div>
           <h1 className="checkout-title">{title}</h1>
           {subtitle && <p className="checkout-subtitle">{subtitle}</p>}

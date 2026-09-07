@@ -1,7 +1,19 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { formatThaiDate } from "./success/ui";
+import {
+  BOOKING_WIZARD_STEPS,
+  canContinueWizard,
+  canSubmitBooking,
+  getWizardStepStatus,
+  invalidateSlotSelection,
+  nextWizardStep,
+  previousWizardStep,
+  type BookingWizardState,
+  type WizardStep,
+} from "@/lib/booking-wizard";
 import {
   compressFaceImage,
   FACE_SOURCE_MAX_BYTES,
@@ -19,23 +31,73 @@ type Slot = {
   capacity: number;
 };
 
+type BookingDetails = {
+  nickname: string;
+  phone: string;
+  consultationTopic: string;
+  birthDateText: string;
+};
+
+type BookingPaymentDisplay = {
+  amountSatang: number | null;
+  ready: boolean;
+};
+
 function todayISO() {
   return new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD, local
+}
+
+function formatAmount(amountSatang: number | null): string | null {
+  if (amountSatang === null) return null;
+  return (amountSatang / 100).toLocaleString("th-TH");
+}
+
+function validationMessage(step: WizardStep): string {
+  switch (step) {
+    case 1:
+      return "กรุณาเลือกวันที่ต้องการจอง";
+    case 2:
+      return "กรุณาเลือกรอบเซสชัน";
+    case 3:
+      return "กรุณากรอกข้อมูลผู้จองให้ครบถ้วน";
+    case 4:
+      return "กรุณาแนบรูปหน้าก่อนตรวจสอบ";
+    case 5:
+      return "กรุณาตรวจสอบข้อมูลให้ครบถ้วน";
+  }
+}
+
+function stepDescription(step: WizardStep): string {
+  switch (step) {
+    case 1:
+      return "เลือกวันที่ต้องการจอง";
+    case 2:
+      return "รอบเซสชันเป็นเวลาโดยประมาณ ไม่ใช่เวลาโทรที่แน่นอน ทีมงานจะติดต่อตามลำดับคิว และการปรึกษาอาจใช้เวลานานกว่ารอบที่แสดง";
+    case 3:
+      return "ข้อมูลนี้ใช้สำหรับดำเนินการจองและให้ทีมงานติดต่อกลับ";
+    case 4:
+      return "กรุณาแนบรูปหน้าชัดเจน เพื่อประกอบการพิจารณาและการปรึกษา";
+    case 5:
+      return "ตรวจสอบรายละเอียดให้ถูกต้องก่อนยืนยันการจองคิว";
+  }
 }
 
 export default function BookingForm({
   source,
   holdMinutes,
+  payment,
 }: {
   source: string;
   holdMinutes: number;
+  payment: BookingPaymentDisplay;
 }) {
   const router = useRouter();
+  const [step, setStep] = useState<WizardStep>(1);
   const [date, setDate] = useState(todayISO());
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
   const [slotId, setSlotId] = useState("");
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<BookingDetails>({
     nickname: "",
     phone: "",
     consultationTopic: "",
@@ -56,14 +118,26 @@ export default function BookingForm({
   // or when the chosen slot/photo changes so each attempt gets its own key while
   // double-clicks / retries reuse it. Same key ties the face upload to the booking.
   const idemKey = useRef("");
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const hasRenderedRef = useRef(false);
 
   useEffect(() => {
     let active = true;
     setLoadingSlots(true);
-    setSlotId("");
+    setSlots([]);
+    // A date change makes a previously selected server slot stale. Keep the
+    // customer fields and prepared photo, but make the next upload/booking
+    // attempt use a fresh idempotency key.
+    setSlotId((currentSlotId) =>
+      invalidateSlotSelection({ slotId: currentSlotId }).slotId,
+    );
+    idemKey.current = "";
+    setUploadToken(null);
+    setError(null);
+
     fetch(`/api/slots?date=${date}`)
       .then((r) => r.json())
-      .then((d) => {
+      .then((d: { slots?: Slot[] }) => {
         if (active) setSlots(d.slots ?? []);
       })
       .catch(() => active && setSlots([]))
@@ -72,6 +146,11 @@ export default function BookingForm({
       active = false;
     };
   }, [date]);
+
+  useEffect(() => {
+    if (hasRenderedRef.current) stepHeadingRef.current?.focus();
+    hasRenderedRef.current = true;
+  }, [step]);
 
   async function onFaceChange(e: React.ChangeEvent<HTMLInputElement>) {
     const input = e.currentTarget;
@@ -120,9 +199,58 @@ export default function BookingForm({
     };
   }, [facePreview]);
 
+  const selectedSlot = slots.find((slot) => slot.id === slotId) ?? null;
+  const wizardState: BookingWizardState = {
+    date,
+    slotId,
+    availableSlotIds: slots.map((slot) => slot.id),
+    nickname: form.nickname,
+    phone: form.phone,
+    birthDateText: form.birthDateText,
+    faceReady: Boolean(faceFile),
+  };
+  const readyToSubmit = canSubmitBooking(wizardState);
+  const completedSteps = [1, 2, 3, 4].filter((item) =>
+    getWizardStepStatus(item as WizardStep, step, wizardState) === "complete",
+  ).length;
+  const currentStep = BOOKING_WIZARD_STEPS[step - 1];
+  const amount = formatAmount(payment.amountSatang);
+
+  function advance() {
+    if (!canContinueWizard(step, wizardState)) {
+      setError(validationMessage(step));
+      return;
+    }
+    setError(null);
+    setStep(nextWizardStep(step, wizardState));
+  }
+
+  function goBack() {
+    if (submitting) return;
+    setError(null);
+    setStep(previousWizardStep(step));
+  }
+
+  function goToStep(target: WizardStep) {
+    const status = getWizardStepStatus(target, step, wizardState);
+    if (target < step && status === "complete") {
+      setError(null);
+      setStep(target);
+    }
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (step !== 5) {
+      advance();
+      return;
+    }
+
     setError(null);
+    if (!readyToSubmit) {
+      setError(validationMessage(5));
+      return;
+    }
     if (!slotId) {
       setError("กรุณาเลือกรอบเซสชัน");
       return;
@@ -188,17 +316,20 @@ export default function BookingForm({
           // Slot changed — new slot pick will reset key and token.
           fetch(`/api/slots?date=${date}`)
             .then((r) => r.json())
-            .then((d) => setSlots(d.slots ?? []))
+            .then((d: { slots?: Slot[] }) => setSlots(d.slots ?? []))
             .catch(() => setSlots([]));
           setSlotId("");
           idemKey.current = "";
           setUploadToken(null);
+          setStep(2);
         } else if (data.error === "face_token_expired" || data.error === "face_token_invalid") {
           // Upload intent invalid — user must pick and re-upload their photo.
           idemKey.current = "";
           setUploadToken(null);
           setFaceFile(null);
           setFacePreview(null);
+          setFaceOriginalBytes(null);
+          setStep(4);
         }
         return;
       }
@@ -223,220 +354,473 @@ export default function BookingForm({
     }
   }
 
-  // Compact progress: reflects how much of the single-page flow is done. It is
-  // decorative (each section already has a numbered heading), so it is hidden
-  // from assistive tech to avoid duplicate step announcements.
-  const steps = [
-    { label: "วันที่", done: Boolean(date) },
-    { label: "รอบ", done: Boolean(slotId) },
-    {
-      label: "ข้อมูล",
-      done: Boolean(form.nickname && form.phone && form.birthDateText),
-    },
-    { label: "รูปหน้า", done: Boolean(faceFile) },
-  ];
-  const activeIndex = steps.findIndex((s) => !s.done);
+  function updateForm<K extends keyof BookingDetails>(field: K, value: BookingDetails[K]) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setError(null);
+  }
+
+  function renderStep() {
+    switch (step) {
+      case 1:
+        return (
+          <section className="booking-step-content" aria-labelledby="booking-step-title">
+            <div className="booking-date-card">
+              <div className="booking-date-card-heading">
+                <span className="booking-icon-tile" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false">
+                    <rect x="3.5" y="5.5" width="17" height="15" rx="2.5" />
+                    <path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17" />
+                  </svg>
+                </span>
+                <div>
+                  <p className="booking-card-kicker">วันที่ต้องการจอง</p>
+                  <p className="booking-card-supporting">เลือกวันและรอบเซสชันที่สะดวก</p>
+                </div>
+              </div>
+              <label className="booking-field">
+                <span className="booking-label">วันที่</span>
+                <input
+                  type="date"
+                  value={date}
+                  min={todayISO()}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="booking-input booking-date-input"
+                  aria-describedby="booking-date-help"
+                />
+              </label>
+            </div>
+            <p id="booking-date-help" className="booking-inline-note">
+              รอบที่แสดงเป็นเวลาโดยประมาณของการปรึกษา ไม่ใช่เวลาโทรที่แน่นอน
+            </p>
+          </section>
+        );
+
+      case 2:
+        return (
+          <section className="booking-step-content" aria-labelledby="booking-step-title">
+            {loadingSlots ? (
+              <p className="booking-alert booking-alert-muted" role="status">
+                กำลังโหลดรอบที่ว่าง...
+              </p>
+            ) : slots.length === 0 ? (
+              <p className="booking-alert booking-alert-muted" role="status">
+                วันนี้ยังไม่มีรอบเซสชันที่เปิดรับจอง กรุณาเลือกวันอื่น
+              </p>
+            ) : (
+              <div className="booking-slot-grid" aria-label="รอบเซสชันที่เปิดรับจอง">
+                {slots.map((slot) => {
+                  const selected = slotId === slot.id;
+                  return (
+                    <button
+                      type="button"
+                      key={slot.id}
+                      aria-pressed={selected}
+                      disabled={slot.remaining <= 0}
+                      onClick={() => {
+                        setSlotId(slot.id);
+                        idemKey.current = ""; // new slot = new booking attempt
+                        setUploadToken(null); // upload token is bound to the idempotency key
+                        setError(null);
+                      }}
+                      className="booking-slot"
+                      data-selected={selected ? "true" : undefined}
+                    >
+                      <span className="booking-slot-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" focusable="false">
+                          <circle cx="12" cy="12" r="8.5" />
+                          <path d="M12 7.5V12l3 2" />
+                        </svg>
+                      </span>
+                      <span className="booking-slot-copy">
+                        <span className="booking-slot-label">{slot.label}</span>
+                        <span className="booking-slot-meta">เหลือ {slot.remaining} คิว</span>
+                      </span>
+                      <span className="booking-slot-indicator" aria-hidden="true">
+                        {selected ? "✓" : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <p className="booking-inline-note">
+              รอบเซสชันเป็นเวลาโดยประมาณ ไม่ใช่เวลาโทรที่แน่นอน ทีมงานจะติดต่อตามลำดับคิว
+              และการปรึกษาอาจใช้เวลานานกว่ารอบที่แสดง
+            </p>
+          </section>
+        );
+
+      case 3:
+        return (
+          <section className="booking-step-content" aria-labelledby="booking-step-title">
+            <div className="booking-form-grid">
+              <label className="booking-field">
+                <span className="booking-label">ชื่อเล่น</span>
+                <input
+                  required
+                  name="nickname"
+                  autoComplete="nickname"
+                  value={form.nickname}
+                  onChange={(e) => updateForm("nickname", e.target.value)}
+                  className="booking-input"
+                />
+              </label>
+              <label className="booking-field">
+                <span className="booking-label">เบอร์โทรศัพท์</span>
+                <input
+                  required
+                  name="phone"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  value={form.phone}
+                  onChange={(e) => updateForm("phone", e.target.value)}
+                  className="booking-input"
+                />
+              </label>
+              <label className="booking-field">
+                <span className="booking-label">วัน/เดือน/ปีเกิด</span>
+                <input
+                  required
+                  name="birthDateText"
+                  value={form.birthDateText}
+                  onChange={(e) => updateForm("birthDateText", e.target.value)}
+                  placeholder="เช่น 1 มกราคม 2540"
+                  className="booking-input"
+                />
+              </label>
+              <label className="booking-field booking-field-wide">
+                <span className="booking-label">หัวข้อที่ต้องการปรึกษาพิเศษ</span>
+                <span className="booking-help">(ระบุหรือไม่ก็ได้)</span>
+                <textarea
+                  name="consultationTopic"
+                  rows={4}
+                  value={form.consultationTopic}
+                  onChange={(e) => updateForm("consultationTopic", e.target.value)}
+                  placeholder="ถ้ามีเรื่องที่อยากให้เน้นเป็นพิเศษ พิมพ์ไว้ตรงนี้ได้"
+                  className="booking-textarea"
+                />
+              </label>
+            </div>
+          </section>
+        );
+
+      case 4:
+        return (
+          <section className="booking-step-content" aria-labelledby="booking-step-title">
+            <p className="booking-alert booking-alert-muted booking-face-intro">
+              กรุณาแนบรูปหน้าชัดเจน เพื่อประกอบการพิจารณาและการปรึกษา
+              รูปจะถูกส่งให้ทีมงานที่เกี่ยวข้องเพื่อดำเนินการจองและเตรียมข้อมูลปรึกษา
+            </p>
+            <label className="booking-upload-field">
+              <span className="booking-label">
+                รูปหน้าตรง <span className="booking-required">*</span>
+              </span>
+              <input
+                type="file"
+                accept={FACE_ACCEPT}
+                onChange={onFaceChange}
+                disabled={faceProcessing}
+                className="booking-file-input"
+              />
+              <span
+                className="booking-dropzone"
+                data-has-file={faceFile ? "true" : undefined}
+              >
+                {facePreview ? (
+                  <span className="booking-preview-wrap">
+                    {/* Browser blob URL from the compressed face file; it is not a remote asset. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={facePreview}
+                      alt="ตัวอย่างรูปหน้า"
+                      width={240}
+                      height={240}
+                      className="booking-dropzone-preview"
+                    />
+                    <span className="booking-dropzone-action">แตะหรือคลิกเพื่อเลือกรูปใหม่</span>
+                  </span>
+                ) : faceProcessing ? (
+                  <span className="booking-dropzone-processing" aria-live="polite">
+                    กำลังปรับขนาดรูป...
+                  </span>
+                ) : (
+                  <span className="booking-dropzone-empty">
+                    <span className="booking-upload-mark" aria-hidden="true">+</span>
+                    <span>แตะหรือคลิกเพื่อเลือกรูป</span>
+                    <small>ระบบบีบอัตโนมัติ (ต้นฉบับสูงสุด 20 MB)</small>
+                  </span>
+                )}
+              </span>
+            </label>
+            {faceFile && (
+              <p className="booking-dropzone-meta" aria-live="polite">
+                {faceFile.name} ({(faceFile.size / 1024).toFixed(0)} KB)
+                {faceOriginalBytes && faceOriginalBytes > faceFile.size + 64 * 1024
+                  ? ` · ลดจาก ${(faceOriginalBytes / 1024 / 1024).toFixed(1)} MB อัตโนมัติ`
+                  : ""}
+              </p>
+            )}
+
+            <div className="booking-review-card">
+              <div className="booking-review-heading">
+                <h3>ตรวจสอบข้อมูล</h3>
+                <span>{readyToSubmit ? "ข้อมูลครบถ้วน" : "ยังมีข้อมูลที่ต้องกรอก"}</span>
+              </div>
+              <dl className="booking-review-list">
+                <ReviewRow label="วันที่" value={formatThaiDate(date)} />
+                <ReviewRow label="รอบเซสชัน" value={selectedSlot?.label ?? "-"} />
+                <ReviewRow label="ชื่อเล่น" value={form.nickname || "-"} />
+                <ReviewRow label="เบอร์โทรศัพท์" value={form.phone || "-"} />
+                <ReviewRow label="วัน/เดือน/ปีเกิด" value={form.birthDateText || "-"} />
+                <ReviewRow label="หัวข้อที่ต้องการปรึกษาพิเศษ" value={form.consultationTopic || "-"} />
+              </dl>
+            </div>
+          </section>
+        );
+
+      case 5:
+        return (
+          <section className="booking-step-content" aria-labelledby="booking-step-title">
+            <div className="booking-confirmation-card">
+              <span className="booking-confirmation-mark" aria-hidden="true">✓</span>
+              <div>
+                <h3>ยืนยันรายละเอียดการจอง</h3>
+                <p>ตรวจสอบข้อมูลอีกครั้งก่อนกดยืนยันการจองคิว</p>
+              </div>
+            </div>
+            <div className="booking-final-review">
+              <dl className="booking-review-list">
+                <ReviewRow label="วันที่" value={formatThaiDate(date)} />
+                <ReviewRow label="รอบเซสชัน" value={selectedSlot?.label ?? "-"} />
+                <ReviewRow label="ชื่อเล่น" value={form.nickname || "-"} />
+                <ReviewRow label="เบอร์โทรศัพท์" value={form.phone || "-"} />
+                <ReviewRow label="วัน/เดือน/ปีเกิด" value={form.birthDateText || "-"} />
+                <ReviewRow label="หัวข้อที่ต้องการปรึกษาพิเศษ" value={form.consultationTopic || "-"} />
+                <ReviewRow label="รูปหน้าตรง" value={faceFile ? "แนบแล้ว" : "ยังไม่ได้แนบ"} />
+              </dl>
+            </div>
+            <div className="booking-payment-handoff">
+              <div className="booking-payment-line">
+                <span>ยอดที่ต้องชำระ</span>
+                <strong>{amount ? `${amount} บาท` : "แจ้งภายหลัง"}</strong>
+              </div>
+              <p>
+                {payment.ready
+                  ? "หลังยืนยันการจอง ระบบจะแสดงรายละเอียดการชำระเงิน"
+                  : "ทีมงานจะติดต่อเพื่อแจ้งรายละเอียดการชำระเงิน"}
+              </p>
+            </div>
+            <p className="booking-note booking-note-left">
+              เมื่อจองแล้วระบบจะถือคิวให้ {holdMinutes} นาที เพื่อรอการชำระเงิน
+            </p>
+          </section>
+        );
+    }
+  }
 
   return (
-    <>
-      <div className="booking-progress" aria-hidden="true">
-        {steps.map((s, i) => (
-          <Fragment key={s.label}>
-            {i > 0 && <span className="booking-progress-bar" />}
-            <div
-              className="booking-progress-step"
-              data-state={
-                s.done ? "done" : i === activeIndex ? "active" : undefined
-              }
-            >
-              <span className="booking-progress-dot">{s.done ? "✓" : i + 1}</span>
-              <span className="booking-progress-label">{s.label}</span>
-            </div>
-          </Fragment>
-        ))}
-      </div>
+    <div className="booking-layout">
+      <div className="booking-workspace">
+        <nav className="booking-stepper" aria-label="ขั้นตอนการจอง">
+          <ol className="booking-stepper-list">
+            {BOOKING_WIZARD_STEPS.map((item, index) => {
+              const itemStep = item.number as WizardStep;
+              const status = getWizardStepStatus(itemStep, step, wizardState);
+              const navigable = itemStep < step && status === "complete";
+              return (
+                <li
+                  key={item.label}
+                  className="booking-stepper-item"
+                  data-state={status}
+                >
+                  <button
+                    type="button"
+                    onClick={() => goToStep(itemStep)}
+                    disabled={itemStep > step || (!navigable && itemStep < step)}
+                    aria-current={status === "current" ? "step" : undefined}
+                    aria-label={`ขั้นตอนที่ ${item.number} ${item.label}`}
+                  >
+                    <span className="booking-stepper-dot" aria-hidden="true">
+                      {status === "complete" ? "✓" : item.number}
+                    </span>
+                    <span className="booking-stepper-label">{item.label}</span>
+                  </button>
+                  {index < BOOKING_WIZARD_STEPS.length - 1 && (
+                    <span className="booking-stepper-line" aria-hidden="true" />
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+          <p className="booking-stepper-progress">ขั้นตอนที่ {step} จาก {BOOKING_WIZARD_STEPS.length}</p>
+        </nav>
 
-      <form onSubmit={onSubmit} className="booking-panel">
-        <section className="booking-section">
-        <h2 className="booking-section-title">
-          <span className="booking-step">1</span>
-          เลือกวันนัด
-        </h2>
-        <label className="booking-field">
-          <span className="booking-label">วันที่ต้องการจอง</span>
+        <form
+          onSubmit={onSubmit}
+          className="booking-panel"
+          aria-describedby="booking-step-description"
+        >
+          <div className="booking-panel-heading">
+            <p className="booking-panel-kicker">ขั้นตอนที่ {step} จาก {BOOKING_WIZARD_STEPS.length}</p>
+            <h2 id="booking-step-title" ref={stepHeadingRef} tabIndex={-1}>
+              {currentStep.label}
+            </h2>
+            <p id="booking-step-description" className="booking-panel-description">
+              {stepDescription(step)}
+            </p>
+          </div>
+
+          <div className="booking-panel-body">{renderStep()}</div>
+
+          {/* Honeypot — visually hidden, off the tab order, ignored by humans. */}
           <input
-            type="date"
-            value={date}
-            min={todayISO()}
-            onChange={(e) => setDate(e.target.value)}
-            className="booking-input"
+            type="text"
+            name="company"
+            tabIndex={-1}
+            autoComplete="off"
+            aria-hidden="true"
+            value={company}
+            onChange={(e) => setCompany(e.target.value)}
+            className="booking-honeypot"
           />
-        </label>
-      </section>
 
-      <section className="booking-section">
-        <h2 className="booking-section-title">
-          <span className="booking-step">2</span>
-          เลือกรอบเซสชัน
-        </h2>
-        {loadingSlots ? (
-          <p className="booking-alert booking-alert-muted">กำลังโหลดรอบที่ว่าง...</p>
-        ) : slots.length === 0 ? (
-          <p className="booking-alert booking-alert-muted">
-            วันนี้ยังไม่มีรอบเซสชันที่เปิดรับจอง กรุณาเลือกวันอื่น
-          </p>
-        ) : (
-          <div className="booking-slots">
-            {slots.map((s) => (
+          {error && (
+            <p className="booking-alert booking-alert-error booking-form-error" role="alert">
+              {error}
+            </p>
+          )}
+
+          <div className="booking-actions">
+            {step > 1 ? (
               <button
                 type="button"
-                key={s.id}
-                aria-pressed={slotId === s.id}
-                onClick={() => {
-                  setSlotId(s.id);
-                  idemKey.current = ""; // new slot = new booking attempt
-                  setUploadToken(null); // upload token is bound to the idempotency key
-                }}
-                className={`booking-slot ${
-                  slotId === s.id ? "booking-slot-selected" : ""
-                }`}
+                onClick={goBack}
+                disabled={submitting}
+                className="booking-back"
               >
-                <span className="booking-slot-label">{s.label}</span>
-                <span className="booking-slot-meta">เหลือ {s.remaining} คิว</span>
+                ย้อนกลับ
               </button>
-            ))}
-          </div>
-        )}
-        <p className="booking-help" style={{ marginTop: 10 }}>
-          รอบเซสชันเป็นเวลาโดยประมาณ ไม่ใช่เวลาโทรที่แน่นอน ทีมงานจะติดต่อตามลำดับคิว
-          และการปรึกษาอาจใช้เวลานานกว่ารอบที่แสดง
-        </p>
-      </section>
-
-      <section className="booking-section">
-        <h2 className="booking-section-title">
-          <span className="booking-step">3</span>
-          ข้อมูลผู้จอง
-        </h2>
-        <div className="booking-form-grid">
-          <label className="booking-field">
-            <span className="booking-label">ชื่อเล่น</span>
-            <input
-              required
-              value={form.nickname}
-              onChange={(e) => setForm({ ...form, nickname: e.target.value })}
-              className="booking-input"
-            />
-          </label>
-          <label className="booking-field">
-            <span className="booking-label">เบอร์โทรศัพท์</span>
-            <input
-              required
-              type="tel"
-              inputMode="tel"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="booking-input"
-            />
-          </label>
-          <label className="booking-field">
-            <span className="booking-label">วัน/เดือน/ปีเกิด</span>
-            <input
-              required
-              value={form.birthDateText}
-              onChange={(e) => setForm({ ...form, birthDateText: e.target.value })}
-              placeholder="เช่น 1 มกราคม 2540"
-              className="booking-input"
-            />
-          </label>
-          <label className="booking-field">
-            <span className="booking-label">หัวข้อที่ต้องการปรึกษาพิเศษ</span>
-            <span className="booking-help">(ระบุหรือไม่ก็ได้)</span>
-            <textarea
-              rows={3}
-              value={form.consultationTopic}
-              onChange={(e) =>
-                setForm({ ...form, consultationTopic: e.target.value })
-              }
-              placeholder="ถ้ามีเรื่องที่อยากให้เน้นเป็นพิเศษ พิมพ์ไว้ตรงนี้ได้"
-              className="booking-textarea"
-            />
-          </label>
-        </div>
-      </section>
-
-      {/* Honeypot — visually hidden, off the tab order, ignored by humans. */}
-      <input
-        type="text"
-        name="company"
-        tabIndex={-1}
-        autoComplete="off"
-        aria-hidden="true"
-        value={company}
-        onChange={(e) => setCompany(e.target.value)}
-        className="booking-hidden-field"
-      />
-
-      <section className="booking-section">
-        <h2 className="booking-section-title">
-          <span className="booking-step">4</span>
-          รูปหน้าตรง
-        </h2>
-        <p className="booking-alert booking-alert-muted" style={{ marginBottom: 14 }}>
-          กรุณาแนบรูปหน้าชัดเจน เพื่อประกอบการพิจารณาและการปรึกษา
-          รูปจะถูกส่งให้ทีมงานที่เกี่ยวข้องเพื่อดำเนินการจองและเตรียมข้อมูลปรึกษา
-        </p>
-        <label className="booking-field" style={{ cursor: "pointer" }}>
-          <span className="booking-label">
-            รูปหน้าตรง <span className="booking-required">*</span>
-          </span>
-          <input
-            type="file"
-            accept={FACE_ACCEPT}
-            onChange={onFaceChange}
-            disabled={faceProcessing}
-            className="booking-hidden-field"
-          />
-          <div className="booking-dropzone" data-has-file={faceFile ? "true" : undefined}>
-            {facePreview ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={facePreview}
-                alt="ตัวอย่างรูปหน้า"
-                className="booking-dropzone-preview"
-              />
-            ) : faceProcessing ? (
-              "กำลังปรับขนาดรูป..."
             ) : (
-              "แตะหรือคลิกเพื่อเลือกรูป · ระบบบีบอัตโนมัติ (ต้นฉบับสูงสุด 20 MB)"
+              <span className="booking-action-spacer" aria-hidden="true" />
+            )}
+            {step < 5 ? (
+              <button
+                type="button"
+                onClick={advance}
+                disabled={!canContinueWizard(step, wizardState) || loadingSlots && step === 2}
+                className="booking-submit booking-continue"
+              >
+                ดำเนินการต่อ
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={submitting || faceProcessing || !readyToSubmit}
+                className="booking-submit"
+              >
+                {faceProcessing ? "กำลังปรับรูป..." : submitting ? "กำลังจอง..." : "ยืนยันการจองคิว"}
+              </button>
             )}
           </div>
-        </label>
-        {faceFile && (
-          <p className="booking-dropzone-meta">
-            {faceFile.name} ({(faceFile.size / 1024).toFixed(0)} KB)
-            {faceOriginalBytes && faceOriginalBytes > faceFile.size + 64 * 1024
-              ? ` · ลดจาก ${(faceOriginalBytes / 1024 / 1024).toFixed(1)} MB อัตโนมัติ`
-              : ""}
-          </p>
-        )}
-      </section>
+        </form>
+      </div>
 
-      <section className="booking-section">
-        {error && <p className="booking-alert booking-alert-error" role="alert">{error}</p>}
+      <aside className="booking-summary" aria-label="สรุปการจอง">
+        <div className="booking-summary-desktop">
+          <BookingSummaryCard
+            date={date}
+            selectedSlot={selectedSlot}
+            amount={amount}
+            paymentReady={payment.ready}
+            readyToSubmit={readyToSubmit}
+            completedSteps={completedSteps}
+            holdMinutes={holdMinutes}
+            currentStep={step}
+          />
+        </div>
+        <details className="booking-summary-mobile">
+          <summary>
+            <span>สรุปการจอง</span>
+            <span className="booking-summary-preview">
+              {selectedSlot?.label ?? "ยังไม่ได้เลือกรอบ"}
+            </span>
+          </summary>
+          <BookingSummaryCard
+            date={date}
+            selectedSlot={selectedSlot}
+            amount={amount}
+            paymentReady={payment.ready}
+            readyToSubmit={readyToSubmit}
+            completedSteps={completedSteps}
+            holdMinutes={holdMinutes}
+            currentStep={step}
+          />
+        </details>
+      </aside>
+    </div>
+  );
+}
 
-        <button
-          type="submit"
-          disabled={submitting || faceProcessing || !slotId || !faceFile}
-          className="booking-submit"
-        >
-          {faceProcessing ? "กำลังปรับรูป..." : submitting ? "กำลังจอง..." : "ยืนยันการจองคิว"}
-        </button>
-        <p className="booking-note">
-          เมื่อจองแล้วระบบจะถือคิวให้ {holdMinutes} นาที เพื่อรอการชำระเงิน
-        </p>
-      </section>
-      </form>
-    </>
+function BookingSummaryCard({
+  date,
+  selectedSlot,
+  amount,
+  paymentReady,
+  readyToSubmit,
+  completedSteps,
+  holdMinutes,
+  currentStep,
+}: {
+  date: string;
+  selectedSlot: Slot | null;
+  amount: string | null;
+  paymentReady: boolean;
+  readyToSubmit: boolean;
+  completedSteps: number;
+  holdMinutes: number;
+  currentStep: WizardStep;
+}) {
+  return (
+    <div className="booking-summary-card">
+      <div className="booking-summary-heading">
+        <div>
+          <p className="booking-panel-kicker">รายละเอียด</p>
+          <h2>สรุปการจอง</h2>
+        </div>
+        <span className="booking-summary-step">{currentStep}/5</span>
+      </div>
+      <dl className="booking-summary-list">
+        <ReviewRow label="วันที่" value={formatThaiDate(date)} />
+        <ReviewRow label="รอบเซสชัน" value={selectedSlot?.label ?? "-"} />
+      </dl>
+      <div className="booking-summary-total">
+        <span>ยอดที่ต้องชำระ</span>
+        <strong>{amount ? `${amount} บาท` : "แจ้งภายหลัง"}</strong>
+      </div>
+      <div className="booking-summary-status" data-ready={readyToSubmit ? "true" : undefined}>
+        <span className="booking-summary-status-dot" aria-hidden="true" />
+        <div>
+          <strong>{readyToSubmit ? "พร้อมยืนยันการจอง" : `ดำเนินการแล้ว ${completedSteps} จาก 4 ขั้นตอน`}</strong>
+          <span>
+            {paymentReady
+              ? "รายละเอียดการชำระเงินจะแสดงหลังยืนยัน"
+              : "ทีมงานจะติดต่อเพื่อแจ้งรายละเอียดการชำระเงิน"}
+          </span>
+        </div>
+      </div>
+      <p className="booking-summary-note">
+        เมื่อจองแล้วระบบจะถือคิวให้ {holdMinutes} นาที เพื่อรอการชำระเงิน
+      </p>
+    </div>
+  );
+}
+
+function ReviewRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="booking-review-row">
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
   );
 }

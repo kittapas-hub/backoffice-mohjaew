@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isPaymentDeadlinePassed } from "./pay-page-gate";
+import { CheckoutIcon } from "@/app/booking/success/ui";
 
 const CHECKOUT_REFRESH_MS = 15_000;
 
@@ -45,7 +46,7 @@ export function PaymentDeadlineGate({
     <main className="checkout-page">
       <div className="checkout-shell" style={{ maxWidth: 460 }}>
         <div className="checkout-hero">
-          <div className="checkout-badge" data-tone="neutral">⏰</div>
+          <div className="checkout-badge" data-tone="neutral"><CheckoutIcon name="clock" /></div>
           <h1 className="checkout-title">รายการหมดอายุ</h1>
           <p className="checkout-subtitle">
             หมดเวลาถือคิวแล้ว กรุณาอย่าโอนเงินหรืออัปโหลดสลิปสำหรับรายการนี้

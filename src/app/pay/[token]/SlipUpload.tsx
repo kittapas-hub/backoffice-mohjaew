@@ -6,6 +6,7 @@
 // failures; permanent mismatches show the server's guidance message.
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { CheckoutIcon } from "@/app/booking/success/ui";
 
 type Phase = "idle" | "uploading" | "verifying" | "confirmed" | "error" | "terminal";
 
@@ -100,7 +101,7 @@ export function SlipUpload({ token }: { token: string }) {
   if (phase === "confirmed") {
     return (
       <div className="checkout-alert" data-tone="success">
-        <div style={{ fontSize: 30 }}>✅</div>
+        <CheckoutIcon name="check" />
         <p className="checkout-alert-title" style={{ marginTop: 4 }}>
           ยืนยันการชำระเงินสำเร็จ
         </p>

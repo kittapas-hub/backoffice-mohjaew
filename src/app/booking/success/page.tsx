@@ -3,7 +3,7 @@ import { getBookingByToken, type BookingTokenData } from "@/lib/booking-core";
 import { paymentConfig, paymentAmountSatang, slipVerificationConfig } from "@/lib/env";
 import { BookingStatusPanel } from "./BookingStatusPanel";
 import { buildLineHref, buildLinePrefill } from "./helpers";
-import { Wrapper, IconCircle, formatThaiDeadline } from "./ui";
+import { CheckoutIcon, Wrapper, IconCircle, formatThaiDeadline } from "./ui";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +22,7 @@ export default async function BookingSuccess({
   if (!booking || !token) {
     return (
       <Wrapper>
-        <IconCircle tone="neutral">🔍</IconCircle>
+        <IconCircle tone="neutral"><CheckoutIcon name="search" /></IconCircle>
         <h1 className="checkout-title">ไม่พบข้อมูลการจอง</h1>
         <p className="checkout-subtitle">ลิงก์อาจหมดอายุหรือไม่ถูกต้อง</p>
         <Link href="/booking" className="checkout-btn" style={{ marginTop: 20 }}>

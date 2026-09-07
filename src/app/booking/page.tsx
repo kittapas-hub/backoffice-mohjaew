@@ -1,4 +1,5 @@
 import { isAllowedSource, paymentHoldMinutes } from "@/lib/slots";
+import { paymentAmountSatang, paymentConfig } from "@/lib/env";
 import BookingForm from "./BookingForm";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,14 @@ export default async function BookingPage({
   // Resolved server-side so the displayed minutes always match what
   // createSlotBooking sends to the create_booking RPC.
   const holdMinutes = paymentHoldMinutes(process.env.BOOKING_HOLD_MINUTES);
+  const amountSatang = paymentAmountSatang();
+  const payment = paymentConfig();
+  const paymentReady = Boolean(
+    amountSatang !== null &&
+      payment.bankName &&
+      payment.accountName &&
+      payment.accountNumber,
+  );
 
   return (
     <main className="booking-page">
@@ -28,7 +37,11 @@ export default async function BookingPage({
             ไม่ใช่เวลาโทรที่แน่นอน — ทีมงานจะติดต่อตามลำดับคิว และการปรึกษาอาจใช้เวลานานกว่ารอบที่แสดง
           </p>
         </header>
-        <BookingForm source={validSource} holdMinutes={holdMinutes} />
+        <BookingForm
+          source={validSource}
+          holdMinutes={holdMinutes}
+          payment={{ amountSatang, ready: paymentReady }}
+        />
       </div>
     </main>
   );

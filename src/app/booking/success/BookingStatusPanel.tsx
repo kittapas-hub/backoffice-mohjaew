@@ -7,7 +7,7 @@ import { HoldCountdown } from "./HoldCountdown";
 import { LineCta } from "./LineCta";
 import { SlipVerificationLink } from "./SlipVerificationLink";
 import { STATUS_POLL_INTERVAL_MS, shouldPollStatus } from "./helpers";
-import { STATUS_INFO, formatThaiDate, Wrapper, IconCircle, Row } from "./ui";
+import { CheckoutIcon, STATUS_INFO, formatThaiDate, Wrapper, IconCircle, Row } from "./ui";
 
 type StatusResponse = {
   status: string;
@@ -95,7 +95,7 @@ export function BookingStatusPanel(props: {
   if (paymentStatus === "manual_review") {
     return (
       <Wrapper>
-        <IconCircle tone="review">🕓</IconCircle>
+        <IconCircle tone="review"><CheckoutIcon name="clock" /></IconCircle>
         <h1 className="checkout-title">อยู่ระหว่างการตรวจสอบ</h1>
         <p className="checkout-subtitle">
           ระบบได้รับสลิปแล้ว ไม่ต้องโอนเงินหรืออัปโหลดสลิปซ้ำ
@@ -125,7 +125,7 @@ export function BookingStatusPanel(props: {
   if (paymentStatus === "unknown") {
     return (
       <Wrapper>
-        <IconCircle tone="review">⚠️</IconCircle>
+        <IconCircle tone="review"><CheckoutIcon name="warning" /></IconCircle>
         <h1 className="checkout-title">ยังตรวจสอบสถานะการชำระเงินไม่ได้</h1>
         <p className="checkout-subtitle">
           กรุณาอย่าโอนเงินหรืออัปโหลดสลิปซ้ำในขณะนี้ แล้วลองเปิดหน้านี้ใหม่หรือติดต่อทีมงาน
@@ -156,14 +156,14 @@ export function BookingStatusPanel(props: {
   // or a live poll update — no manual refresh needed. ────────────────────────
   if (!shouldPollStatus(status)) {
     const info = STATUS_INFO[status] ?? {
-      icon: "ℹ️",
+      icon: "info",
       title: "สถานะการจอง",
       body: "กรุณาติดต่อทีมงาน",
       tone: "neutral" as const,
     };
     return (
       <Wrapper>
-        <IconCircle tone={info.tone}>{info.icon}</IconCircle>
+        <IconCircle tone={info.tone}><CheckoutIcon name={info.icon} /></IconCircle>
         <h1 className="checkout-title">{info.title}</h1>
         <p className="checkout-subtitle">{info.body}</p>
         <div className="checkout-card" style={{ marginTop: 20, textAlign: "left" }}>
@@ -186,7 +186,7 @@ export function BookingStatusPanel(props: {
       <div className="checkout-shell checkout-shell-wide">
         <div className="checkout-hero">
           <div className="checkout-badge" data-tone="warn">
-            ⏳
+            <CheckoutIcon name="clock" />
           </div>
           <h1 className="checkout-title">ระบบกำลังถือคิวให้คุณ</h1>
           <p className="checkout-subtitle">
