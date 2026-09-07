@@ -77,10 +77,24 @@ export default async function DayView({
     : { data: [] as Booking[] };
 
   const bookingIds = (bookings ?? []).map((b) => b.id);
-  const { data: faceRows } = bookingIds.length
-    ? await db.from("booking_images").select("booking_id").in("booking_id", bookingIds)
-    : { data: null };
+  const [{ data: faceRows }, { data: reviewRows, error: reviewError }] = bookingIds.length
+    ? await Promise.all([
+        db.from("booking_images").select("booking_id").in("booking_id", bookingIds),
+        db
+          .from("payment_orders")
+          .select("booking_id")
+          .in("booking_id", bookingIds)
+          .eq("status", "manual_review"),
+      ])
+    : [
+        { data: [] as { booking_id: string }[] },
+        { data: [] as { booking_id: string }[], error: null },
+      ];
   const faceSet = new Set((faceRows ?? []).map((r) => r.booking_id as string));
+  const manualReviewBookings = new Set(
+    (reviewRows ?? []).map((row) => row.booking_id as string),
+  );
+  const paymentStateKnown = !reviewError;
 
   const bySlot = groupBookingsBySlot((bookings ?? []) as Booking[]);
 
@@ -218,7 +232,17 @@ export default async function DayView({
                             {(SLOT_TRANSITIONS[b.status] ?? [])
                               .filter((t) => t !== "expired")
                               .map((to) =>
-                                b.status === "pending_payment" && to === "confirmed" ? (
+                                b.status === "pending_payment" && to === "confirmed" &&
+                                paymentStateKnown && manualReviewBookings.has(b.id) ? (
+                                  <Link
+                                    key={to}
+                                    href={`/admin/bookings/${b.id}`}
+                                    className="rounded border border-amber-300 px-2 py-1 text-xs font-semibold text-amber-700"
+                                  >
+                                    ตรวจสอบการชำระ
+                                  </Link>
+                                ) : b.status === "pending_payment" && to === "confirmed" &&
+                                  paymentStateKnown ? (
                                   <ConfirmPaymentButton
                                     key={to}
                                     bookingId={b.id}
@@ -227,8 +251,9 @@ export default async function DayView({
                                     slotInfo={`${date} ${slot.label}`}
                                     refCode={b.id.slice(0, 8).toUpperCase()}
                                     redirectTo={`/admin/day?date=${date}`}
+                                    verifiedClaimAvailable={false}
                                   />
-                                ) : (
+                                ) : b.status === "pending_payment" && to === "confirmed" ? null : (
                                   <form key={to} action={transitionSlotBooking}>
                                     <input type="hidden" name="bookingId" value={b.id} />
                                     <input type="hidden" name="to" value={to} />

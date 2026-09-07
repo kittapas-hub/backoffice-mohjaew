@@ -10,7 +10,7 @@ type Props = {
   slotInfo: string | null;
   refCode: string;
   redirectTo: string;
-  verifiedClaimAvailable?: boolean;
+  verifiedClaimAvailable: boolean;
 };
 
 export function ConfirmPaymentButton({
@@ -20,7 +20,7 @@ export function ConfirmPaymentButton({
   slotInfo,
   refCode,
   redirectTo,
-  verifiedClaimAvailable = false,
+  verifiedClaimAvailable,
 }: Props) {
   const [isPending, startTransition] = useTransition();
 

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   FACE_MAX_DIMENSION,
   FACE_SOURCE_MAX_BYTES,
@@ -15,5 +17,20 @@ assert.throws(() => fitWithinMaxDimension(0, 100), /invalid_dimensions/);
 assert.equal(FACE_MAX_DIMENSION, 1800);
 assert.ok(FACE_SOURCE_MAX_BYTES > FACE_UPLOAD_MAX_BYTES);
 assert.ok(FACE_UPLOAD_MAX_BYTES > FACE_TARGET_BYTES);
+
+const compressionSource = readFileSync(
+  fileURLToPath(new URL("./client-image-compression.ts", import.meta.url)),
+  "utf8",
+);
+assert.match(
+  compressionSource,
+  /createImageBitmap\(file,\s*\{\s*imageOrientation:\s*"from-image"/,
+  "phone EXIF orientation must be applied before canvas drawing",
+);
+assert.match(
+  compressionSource,
+  /loaded\.width <= FACE_MAX_DIMENSION[\s\S]*loaded\.height <= FACE_MAX_DIMENSION/,
+  "small source files must not bypass the image dimension policy",
+);
 
 console.log("client image compression self-check passed");

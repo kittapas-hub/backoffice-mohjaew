@@ -6,11 +6,13 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const read = (p: string) => readFileSync(join(root, p), "utf8");
 const migration = read("supabase/migrations/0011_slip_verification.sql");
+const providerDuplicateMigration = read("supabase/migrations/0019_recover_provider_duplicate_slip.sql");
 const route = read("src/app/api/pay/[token]/slip/route.ts");
 const confirm = read("src/lib/payments/slip/confirm.ts");
 const successPage = read("src/app/booking/success/page.tsx");
 const orderRoute = read("src/app/api/pay/[token]/order/route.ts");
 const env = read("src/lib/env.ts");
+const evidence = read("src/lib/payments/slip/evidence.ts");
 
 assert.match(migration, /^begin;[\s\S]*commit;\s*$/m, "0011 is an atomic migration");
 assert.match(migration, /create table if not exists public\.payment_transactions/);
@@ -42,4 +44,15 @@ assert.match(confirm, /p_currency: opts\.slip\.currency/);
 assert.doesNotMatch(confirm, /p_currency: "THB"/);
 assert.match(confirm, /slipVerificationEnabled\(\)/);
 assert.match(env, /SLIP_VERIFICATION_ENABLED[\s\S]*?SLIP_VERIFICATION_PROVIDER[\s\S]*?easyslip_v2/);
+assert.match(evidence, /provider_duplicate: slip\.duplicateSignal/);
+assert.match(
+  providerDuplicateMigration,
+  /p_evidence->>'provider_duplicate' = 'true'[\s\S]*v_reason := 'provider_duplicate'/,
+  "an unseen provider-only duplicate must be claimed into manual review",
+);
+assert.match(
+  providerDuplicateMigration,
+  /normalized_tx_ref = v_tx_ref for update[\s\S]*duplicate_tx/,
+  "local transaction uniqueness must still reject cross-order replay",
+);
 console.log("slip-confirm self-check passed");

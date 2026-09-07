@@ -36,9 +36,13 @@ export default async function BookingSuccess({
   // while pending_payment and swaps to the confirmed/expired/cancelled view
   // without a manual refresh. ────────────────────────────────────────────────
   const cfg = paymentConfig();
+  const amountSatang = paymentAmountSatang();
   const hasPaymentConfig = Boolean(
-    cfg.amount && cfg.bankName && cfg.accountName && cfg.accountNumber,
+    amountSatang !== null && cfg.bankName && cfg.accountName && cfg.accountNumber,
   );
+  // Display the same rounded integer amount that the server sends to the
+  // payment-order RPC. Never show a malformed raw env value such as NaN.
+  const displayAmount = amountSatang === null ? "" : String(amountSatang / 100);
   const hasQR = Boolean(cfg.qrPath);
   const qrSrc = cfg.qrPath.startsWith("/") ? cfg.qrPath : `/${cfg.qrPath}`;
   const deadline = formatThaiDeadline(booking.holdExpiresAt);
@@ -48,7 +52,6 @@ export default async function BookingSuccess({
   // Rendering is read-only. The client performs explicit POST-only,
   // idempotent order creation when the customer chooses slip verification.
   let slipOrderUrl: string | null = null;
-  const amountSatang = paymentAmountSatang();
   const slipCfg = slipVerificationConfig();
   const holdLive = Boolean(
     booking.holdExpiresAt &&
@@ -69,6 +72,7 @@ export default async function BookingSuccess({
     <BookingStatusPanel
       token={token}
       initialStatus={booking.status}
+      initialPaymentStatus={booking.paymentStatus}
       reference={booking.reference}
       bookingDate={booking.bookingDate}
       slotLabel={booking.slotLabel}
@@ -78,7 +82,7 @@ export default async function BookingSuccess({
       hasPaymentConfig={hasPaymentConfig}
       hasQR={hasQR}
       qrSrc={qrSrc}
-      amount={cfg.amount}
+      amount={displayAmount}
       bankName={cfg.bankName}
       accountName={cfg.accountName}
       accountNumber={cfg.accountNumber}

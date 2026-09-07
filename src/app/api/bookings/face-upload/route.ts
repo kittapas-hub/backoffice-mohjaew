@@ -4,7 +4,11 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { recordRateHit } from "@/lib/booking-core";
 import { clientIp } from "@/lib/client-ip";
 import { sniffImage } from "@/lib/image-meta";
-import { faceFileFitsBeforeBuffering, validateFaceUploadContentLength } from "@/lib/face-upload-guard";
+import {
+  faceFileFitsBeforeBuffering,
+  faceImageDimensionsFit,
+  validateFaceUploadContentLength,
+} from "@/lib/face-upload-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,13 +66,30 @@ export async function POST(req: NextRequest) {
   //    same key is free — only genuinely new upload attempts are counted.
   const { data: existing } = await db
     .from("booking_face_uploads")
-    .select("id")
+    .select("id, storage_path")
     .eq("idempotency_key", idempotencyKey)
     .eq("status", "pending")
     .gt("expires_at", new Date().toISOString())
     .maybeSingle();
   if (existing) {
-    return NextResponse.json({ uploadToken: existing.id });
+    // The intent row is inserted before storage upload. A concurrent retry
+    // must not claim an intent whose object is still being uploaded (or whose
+    // first upload failed), otherwise create_booking could link a missing
+    // object. Listing metadata avoids downloading the image just to verify
+    // readiness; an uncertain check is retryable and does not consume a new
+    // upload attempt.
+    const pathParts = String(existing.storage_path).split("/");
+    const fileName = pathParts[pathParts.length - 1] ?? "";
+    const { data: objects, error: listErr } = await db.storage
+      .from("booking-faces")
+      .list("faces", { limit: 10, search: fileName });
+    const objectReady =
+      !listErr && objects?.some((object) => object.name === fileName);
+    if (objectReady) return NextResponse.json({ uploadToken: existing.id });
+    return NextResponse.json(
+      { error: "upload_in_progress", message: "กำลังเตรียมรูป กรุณาลองใหม่อีกครั้ง" },
+      { status: 409 },
+    );
   }
 
   // 5. Rate limit: 5 new uploads / 15 min per hashed IP. Only reached when no
@@ -123,6 +144,12 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
+  if (!faceImageDimensionsFit(meta.width, meta.height)) {
+    return NextResponse.json(
+      { error: "invalid_dimensions", message: "รูปมีขนาดไม่เหมาะสม กรุณาเลือกรูปอื่น" },
+      { status: 400 },
+    );
+  }
 
   // 8. Generate uploadToken (= DB primary key) and server-controlled path.
   //    Client never sees the storage path - only the opaque uploadToken UUID.
@@ -161,6 +188,9 @@ export async function POST(req: NextRequest) {
     .upload(storagePath, buffer, { contentType: meta.type, upsert: false });
 
   if (storageErr) {
+    // Remove a possible partial object before freeing the intent row. If the
+    // DB delete also fails, the cleanup cron can still use the intent lease.
+    await db.storage.from("booking-faces").remove([storagePath]);
     // Rollback the intent row so the idempotency key slot is freed.
     await db.from("booking_face_uploads").delete().eq("id", uploadToken);
     console.error("[face-upload] storage upload failed", storageErr);

@@ -3,7 +3,7 @@
 // so the confirmed/cancelled/expired card looks identical regardless of
 // whether it was the initial render or a live status-poll update.
 
-type StatusTone = "success" | "neutral" | "warn";
+type StatusTone = "success" | "neutral" | "warn" | "review";
 
 // Status states other than pending_payment.
 export const STATUS_INFO: Record<
@@ -90,7 +90,7 @@ export function IconCircle({
   tone,
 }: {
   children: React.ReactNode;
-  tone?: "success" | "neutral" | "warn";
+  tone?: StatusTone;
 }) {
   return (
     <div className="checkout-badge" data-tone={tone}>

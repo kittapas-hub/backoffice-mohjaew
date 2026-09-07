@@ -17,6 +17,7 @@ type BookingRow = {
   consultation_topic: string;
   status: string;
   created_at: string;
+  hold_expires_at: string | null;
   slot_id: string | null;
   source: string | null;
   booking_slots: { booking_date: string; label: string }[] | null;
@@ -44,7 +45,7 @@ export default async function AdminHome({
   let query = db
     .from("bookings")
     .select(
-      "id, nickname, phone, consultation_topic, status, created_at, slot_id, source, booking_slots(booking_date, label)",
+      "id, nickname, phone, consultation_topic, status, created_at, hold_expires_at, slot_id, source, booking_slots(booking_date, label)",
       { count: "exact" },
     )
     .order("created_at", { ascending: false })
@@ -65,6 +66,20 @@ export default async function AdminHome({
     });
   }
   const bookings = (data ?? []) as unknown as BookingRow[];
+  const bookingIds = bookings.map((booking) => booking.id);
+  const { data: reviewRows, error: reviewError } = bookingIds.length
+    ? await db
+        .from("payment_orders")
+        .select("booking_id")
+        .in("booking_id", bookingIds)
+        .eq("status", "manual_review")
+    : { data: [] as { booking_id: string }[], error: null };
+  const manualReviewBookings = new Set(
+    (reviewRows ?? []).map((row) => row.booking_id as string),
+  );
+  // If payment state cannot be loaded, hide inline overrides and require the
+  // authenticated detail page rather than risk bypassing a review claim.
+  const paymentStateKnown = !reviewError;
   const total = count ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const firstRow = bookings.length ? from + 1 : 0;
@@ -176,7 +191,17 @@ export default async function AdminHome({
                     >
                       ดูรายละเอียด
                     </Link>
-                    {b.status === "pending_payment" && b.slot_id && (
+                    {b.status === "pending_payment" && b.slot_id &&
+                      paymentStateKnown && manualReviewBookings.has(b.id) ? (
+                      <Link
+                        href={`/admin/bookings/${b.id}`}
+                        className="text-xs font-semibold text-amber-700 hover:underline"
+                      >
+                        ตรวจสอบการชำระ
+                      </Link>
+                    ) : b.status === "pending_payment" && b.slot_id &&
+                      paymentStateKnown && b.hold_expires_at &&
+                      new Date(b.hold_expires_at).getTime() > Date.now() ? (
                       <ConfirmPaymentButton
                         bookingId={b.id}
                         nickname={b.nickname}
@@ -188,8 +213,9 @@ export default async function AdminHome({
                         }
                         refCode={b.id.slice(0, 8).toUpperCase()}
                         redirectTo="/admin"
+                        verifiedClaimAvailable={false}
                       />
-                    )}
+                    ) : null}
                   </div>
                 </td>
               </tr>
@@ -209,7 +235,7 @@ export default async function AdminHome({
           <div className="flex items-start justify-between gap-3"><div><p className="font-mono text-xs font-bold tracking-wide text-rose-700">#{b.id.slice(0,8).toUpperCase()}</p><Link href={`/admin/bookings/${b.id}`} className="admin-focus mt-1 block text-base font-bold text-gray-900">{b.nickname}</Link></div><StatusBadge status={b.status} /></div>
           <dl className="mt-3 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs text-gray-500">โทร</dt><dd>{b.phone}</dd></div><div><dt className="text-xs text-gray-500">วันที่สร้าง</dt><dd>{new Date(b.created_at).toLocaleString("th-TH")}</dd></div><div className="col-span-2"><dt className="text-xs text-gray-500">หัวข้อ</dt><dd>{b.consultation_topic}</dd></div></dl>
           {b.source === "line" && !b.slot_id ? <p className="mt-3 text-xs text-amber-700">รอตรวจสอบ · ยังไม่เลือกเวลา</p> : null}
-          <div className="mt-4 flex flex-wrap items-center gap-2"><Link href={`/admin/bookings/${b.id}`} className="admin-focus rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700">ดูรายละเอียด</Link>{b.status === "pending_payment" && b.slot_id ? <ConfirmPaymentButton bookingId={b.id} nickname={b.nickname} phone={b.phone} slotInfo={b.booking_slots?.[0] ? `${b.booking_slots[0].booking_date} ${b.booking_slots[0].label}` : null} refCode={b.id.slice(0,8).toUpperCase()} redirectTo="/admin" /> : null}</div>
+          <div className="mt-4 flex flex-wrap items-center gap-2"><Link href={`/admin/bookings/${b.id}`} className="admin-focus rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700">ดูรายละเอียด</Link>{b.status === "pending_payment" && b.slot_id && paymentStateKnown && manualReviewBookings.has(b.id) ? <span className="text-xs font-semibold text-amber-700">ต้องตรวจสอบการชำระ</span> : b.status === "pending_payment" && b.slot_id && paymentStateKnown && b.hold_expires_at && new Date(b.hold_expires_at).getTime() > Date.now() ? <ConfirmPaymentButton bookingId={b.id} nickname={b.nickname} phone={b.phone} slotInfo={b.booking_slots?.[0] ? `${b.booking_slots[0].booking_date} ${b.booking_slots[0].label}` : null} refCode={b.id.slice(0,8).toUpperCase()} redirectTo="/admin" verifiedClaimAvailable={false} /> : null}</div>
         </article>)}{bookings.length === 0 ? <p className="p-8 text-center text-sm text-gray-500">{q ? `ไม่พบรายการที่ตรงกับ “${q}”` : "ยังไม่มีรายการ"}</p> : null}</div>
         <div className="flex items-center justify-between border-t border-[#eee5e2] px-4 py-4 sm:px-5"><p className="text-xs text-gray-500">50 รายการต่อหน้า</p><div className="flex gap-2">{page > 1 ? <Link href={pageHref(page - 1)} className="admin-focus rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold hover:bg-gray-50">ก่อนหน้า</Link> : <span className="rounded-lg border border-gray-100 px-3 py-2 text-sm text-gray-300">ก่อนหน้า</span>}{page < totalPages ? <Link href={pageHref(page + 1)} className="admin-focus rounded-lg bg-gray-900 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-800">ถัดไป</Link> : <span className="rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-400">ถัดไป</span>}</div></div>
       </div>

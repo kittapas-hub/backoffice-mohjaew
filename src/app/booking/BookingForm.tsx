@@ -76,10 +76,12 @@ export default function BookingForm({
   async function onFaceChange(e: React.ChangeEvent<HTMLInputElement>) {
     const input = e.currentTarget;
     const file = input.files?.[0] ?? null;
+    // Allow the same file to be selected again after a failed compression or
+    // upload. The File object is already captured in local state below.
+    input.value = "";
     if (!file) return;
     if (file.size > FACE_SOURCE_MAX_BYTES) {
       setError("รูปต้นฉบับต้องมีขนาดไม่เกิน 20 MB");
-      input.value = "";
       return;
     }
 
@@ -99,7 +101,6 @@ export default function BookingForm({
       setFaceFile(prepared);
       setFacePreview(URL.createObjectURL(prepared));
     } catch (err) {
-      input.value = "";
       setFaceFile(null);
       setFacePreview(null);
       setFaceOriginalBytes(null);
@@ -165,44 +166,61 @@ export default function BookingForm({
       }
     }
 
-    const res = await fetch("/api/bookings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Idempotency-Key": idemKey.current,
-      },
-      body: JSON.stringify({ slotId, source, company, faceUploadToken: token, ...form }),
-    });
-    const data = await res.json();
-    setSubmitting(false);
+    try {
+      const res = await fetch("/api/bookings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idemKey.current,
+        },
+        body: JSON.stringify({ slotId, source, company, faceUploadToken: token, ...form }),
+      });
+      const parsed: unknown = await res.json();
+      const data =
+        parsed && typeof parsed === "object"
+          ? (parsed as { error?: string; message?: string; token?: string })
+          : {};
+      setSubmitting(false);
 
-    if (!res.ok) {
-      setError(data.message ?? "เกิดข้อผิดพลาด กรุณาลองใหม่");
-      if (data.error === "slot_full" || data.error === "slot_closed") {
-        // Slot changed — new slot pick will reset key and token.
-        fetch(`/api/slots?date=${date}`)
-          .then((r) => r.json())
-          .then((d) => setSlots(d.slots ?? []));
-        setSlotId("");
-        idemKey.current = "";
-        setUploadToken(null);
-      } else if (data.error === "face_token_expired" || data.error === "face_token_invalid") {
-        // Upload intent invalid — user must pick and re-upload their photo.
-        idemKey.current = "";
-        setUploadToken(null);
-        setFaceFile(null);
-        setFacePreview(null);
+      if (!res.ok) {
+        setError(data.message ?? "เกิดข้อผิดพลาด กรุณาลองใหม่");
+        if (data.error === "slot_full" || data.error === "slot_closed") {
+          // Slot changed — new slot pick will reset key and token.
+          fetch(`/api/slots?date=${date}`)
+            .then((r) => r.json())
+            .then((d) => setSlots(d.slots ?? []))
+            .catch(() => setSlots([]));
+          setSlotId("");
+          idemKey.current = "";
+          setUploadToken(null);
+        } else if (data.error === "face_token_expired" || data.error === "face_token_invalid") {
+          // Upload intent invalid — user must pick and re-upload their photo.
+          idemKey.current = "";
+          setUploadToken(null);
+          setFaceFile(null);
+          setFacePreview(null);
+        }
+        return;
       }
-      return;
+
+      if (!data.token) {
+        setError("ระบบสร้างการจองไม่สำเร็จ กรุณาลองใหม่");
+        return;
+      }
+
+      // Success: clear attempt state so next booking starts fresh.
+      idemKey.current = "";
+      setUploadToken(null);
+
+      // Pass only the booking token (full UUID). The success page fetches
+      // all display data from the DB — no booking details travel via URL.
+      router.push(`/booking/success?token=${encodeURIComponent(data.token)}`);
+    } catch {
+      // Keep idemKey/uploadToken intact: a retry must converge on the same
+      // booking instead of creating a second hold or uploading another face.
+      setSubmitting(false);
+      setError("ส่งข้อมูลการจองไม่สำเร็จ กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่");
     }
-
-    // Success: clear attempt state so next booking starts fresh.
-    idemKey.current = "";
-    setUploadToken(null);
-
-    // Pass only the booking token (full UUID). The success page fetches
-    // all display data from the DB — no booking details travel via URL.
-    router.push(`/booking/success?token=${encodeURIComponent(data.token)}`);
   }
 
   // Compact progress: reflects how much of the single-page flow is done. It is
@@ -273,6 +291,7 @@ export default function BookingForm({
               <button
                 type="button"
                 key={s.id}
+                aria-pressed={slotId === s.id}
                 onClick={() => {
                   setSlotId(s.id);
                   idemKey.current = ""; // new slot = new booking attempt
@@ -404,7 +423,7 @@ export default function BookingForm({
       </section>
 
       <section className="booking-section">
-        {error && <p className="booking-alert booking-alert-error">{error}</p>}
+        {error && <p className="booking-alert booking-alert-error" role="alert">{error}</p>}
 
         <button
           type="submit"

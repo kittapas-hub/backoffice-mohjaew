@@ -80,7 +80,14 @@ export function paymentAmountSatang(): number | null {
   const raw = process.env.BOOKING_PAYMENT_AMOUNT_THB ?? "";
   const n = Number(raw);
   if (!raw || !Number.isFinite(n) || n <= 0) return null;
-  return Math.round(n * 100);
+  // payment_orders.amount_satang is a positive PostgreSQL int. Fail closed
+  // before an invalid/overflowing config can render NaN or make order RPCs
+  // fail after the customer has already reached checkout.
+  const satang = Math.round(n * 100);
+  if (!Number.isSafeInteger(satang) || satang <= 0 || satang > 2_147_483_647) {
+    return null;
+  }
+  return satang;
 }
 
 // Payment instructions displayed on /booking/success.

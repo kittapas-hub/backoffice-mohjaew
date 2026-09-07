@@ -75,12 +75,19 @@ try {
     c: Client,
     orderId: string,
     ref: string,
-    opts: { at?: Date; amount?: number; currency?: string; profile?: string | null } = {},
+    opts: {
+      at?: Date;
+      amount?: number;
+      currency?: string;
+      profile?: string | null;
+      providerDuplicate?: boolean;
+    } = {},
   ) {
     return (await c.query(
-      `select public.confirm_slip_payment($1,'promptpay_slip',$2,coalesce($3::timestamptz,now()),$4,$5,$6,'{}'::jsonb) as result`,
+      `select public.confirm_slip_payment($1,'promptpay_slip',$2,coalesce($3::timestamptz,now()),$4,$5,$6,$7::jsonb) as result`,
       [orderId, ref, opts.at?.toISOString() ?? null, opts.amount ?? 99900,
-        opts.currency ?? "THB", opts.profile === undefined ? "profile-test" : opts.profile],
+        opts.currency ?? "THB", opts.profile === undefined ? "profile-test" : opts.profile,
+        JSON.stringify({ provider_duplicate: opts.providerDuplicate ?? false })],
     )).rows[0].result;
   }
 
@@ -90,6 +97,35 @@ try {
   const replay = await order(await booking(), "two");
   assert.deepEqual(await confirmWith(db, replay, "REF one"),
     { result: "rejected", reason: "duplicate_tx" });
+
+  // EasySlip marks a same-branch retry as duplicate even when the first app
+  // request died before writing the local ledger. An unseen provider-only
+  // duplicate is claimed once into manual review, never auto-confirmed.
+  const providerDuplicateBooking = await booking();
+  const providerDuplicateOrder = await order(providerDuplicateBooking, "provider-duplicate");
+  assert.deepEqual(
+    await confirmWith(db, providerDuplicateOrder, "REF provider duplicate", {
+      providerDuplicate: true,
+    }),
+    { result: "manual_review", reason: "provider_duplicate" },
+  );
+  assert.equal((await db.query(
+    "select failure_code from public.payment_orders where id=$1",
+    [providerDuplicateOrder],
+  )).rows[0].failure_code, "provider_duplicate");
+  assert.deepEqual(
+    await confirmWith(db, providerDuplicateOrder, "REF provider duplicate", {
+      providerDuplicate: true,
+    }),
+    { result: "manual_review", reason: "provider_duplicate" },
+  );
+  const providerDuplicateReplay = await order(await booking(), "provider-duplicate-replay");
+  assert.deepEqual(
+    await confirmWith(db, providerDuplicateReplay, "REF provider duplicate", {
+      providerDuplicate: true,
+    }),
+    { result: "rejected", reason: "duplicate_tx" },
+  );
 
   const late = await order(await booking(), "late");
   const lateResult = await confirmWith(db, late, "REF late", { at: new Date(Date.now() - 60_000) });
@@ -153,6 +189,15 @@ try {
   const manualOrder = await order(manualBooking, "manual-approve");
   assert.equal((await confirmWith(db, manualOrder, "REF manual approve", { profile: null })).result,
     "manual_review");
+  await assert.rejects(
+    () => db.query("select public.transition_slot_booking($1,'confirmed')", [manualBooking]),
+    /payment_review_required/,
+    "booking-only override must not bypass a verified manual-review claim",
+  );
+  assert.equal(
+    (await db.query("select status from public.bookings where id=$1", [manualBooking])).rows[0].status,
+    "pending_payment",
+  );
   assert.equal((await db.query(
     "select public.approve_manual_review_payment($1) result", [manualBooking],
   )).rows[0].result.result, "ok");

@@ -4,10 +4,10 @@
 // real upload progress bar is possible. Shows: idle → uploading (progress) →
 // verifying → confirmed / error. Retry stays available for temporary
 // failures; permanent mismatches show the server's guidance message.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-type Phase = "idle" | "uploading" | "verifying" | "confirmed" | "error";
+type Phase = "idle" | "uploading" | "verifying" | "confirmed" | "error" | "terminal";
 
 type ServerFail = { error?: string; message?: string; retryable?: boolean };
 
@@ -16,10 +16,15 @@ const MAX_BYTES = 4 * 1024 * 1024;
 export function SlipUpload({ token }: { token: string }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  const xhrRef = useRef<XMLHttpRequest | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
   const [retryable, setRetryable] = useState(true);
+
+  useEffect(() => {
+    return () => xhrRef.current?.abort();
+  }, []);
 
   function onPick() {
     inputRef.current?.click();
@@ -41,8 +46,12 @@ export function SlipUpload({ token }: { token: string }) {
     form.append("file", file);
 
     const xhr = new XMLHttpRequest();
+    xhrRef.current = xhr;
     xhr.open("POST", `/api/pay/${encodeURIComponent(token)}/slip`);
     xhr.responseType = "json";
+    // Provider verification is bounded server-side; do not leave a mobile
+    // checkout stuck in a busy state if the connection disappears silently.
+    xhr.timeout = 30_000;
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
         const pct = Math.round((e.loaded / e.total) * 100);
@@ -51,16 +60,34 @@ export function SlipUpload({ token }: { token: string }) {
       }
     };
     xhr.onerror = () => {
+      xhrRef.current = null;
       setPhase("error");
       setRetryable(true);
       setMessage("การเชื่อมต่อขัดข้อง กรุณาลองใหม่อีกครั้ง");
     };
+    xhr.ontimeout = () => {
+      xhrRef.current = null;
+      setPhase("error");
+      setRetryable(true);
+      setMessage("การตรวจสอบใช้เวลานานเกินไป กรุณาลองใหม่อีกครั้ง");
+    };
     xhr.onload = () => {
+      xhrRef.current = null;
       const body = (xhr.response ?? {}) as { status?: string } & ServerFail;
       if (xhr.status === 200 && body.status === "confirmed") {
         setPhase("confirmed");
         // Refresh the server component so the page shows the paid state.
         setTimeout(() => router.refresh(), 1200);
+        return;
+      }
+      if (body.error === "manual_review" || body.error === "order_closed") {
+        // These states are terminal for this checkout. In particular, never
+        // invite a customer to re-upload after money was routed to review or
+        // after the hold/order was closed.
+        setPhase("terminal");
+        setRetryable(false);
+        setMessage(body.message ?? "รายการนี้ปิดแล้ว กรุณาติดต่อทีมงาน");
+        router.refresh();
         return;
       }
       setPhase("error");
@@ -82,6 +109,15 @@ export function SlipUpload({ token }: { token: string }) {
     );
   }
 
+  if (phase === "terminal") {
+    return (
+      <div className="checkout-alert" data-tone="warn" role="alert">
+        <p className="checkout-alert-title">รายการนี้ไม่สามารถส่งสลิปเพิ่มได้</p>
+        <p className="checkout-alert-body">{message}</p>
+      </div>
+    );
+  }
+
   const busy = phase === "uploading" || phase === "verifying";
 
   return (
@@ -98,7 +134,12 @@ export function SlipUpload({ token }: { token: string }) {
         type="file"
         accept="image/jpeg,image/png,image/webp"
         className="hidden"
-        onChange={(e) => onFile(e.target.files?.[0] ?? null)}
+        onChange={(e) => {
+          const file = e.target.files?.[0] ?? null;
+          // Permit retrying with the same image after a failed attempt.
+          e.currentTarget.value = "";
+          onFile(file);
+        }}
         disabled={busy}
       />
 

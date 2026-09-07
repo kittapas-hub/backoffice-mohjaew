@@ -29,7 +29,12 @@ type LoadedImage = {
 
 async function loadBrowserImage(file: File): Promise<LoadedImage> {
   if (typeof createImageBitmap === "function") {
-    const bitmap = await createImageBitmap(file);
+    // Apply EXIF orientation before drawing into the canvas. Without this,
+    // many phone portraits are stored sideways even though their preview was
+    // upright in the gallery.
+    const bitmap = await createImageBitmap(file, {
+      imageOrientation: "from-image",
+    });
     return {
       source: bitmap,
       width: bitmap.width,
@@ -90,7 +95,15 @@ export async function compressFaceImage(file: File): Promise<File> {
     }
 
     const originalIsSafe = file.size <= FACE_UPLOAD_MAX_BYTES;
-    if (originalIsSafe && file.size <= blob.size) return file;
+    // Never bypass the dimension policy just because a small source file would
+    // be larger than the JPEG output (highly-compressible PNGs can still have
+    // unsafe dimensions).
+    if (
+      originalIsSafe &&
+      loaded.width <= FACE_MAX_DIMENSION &&
+      loaded.height <= FACE_MAX_DIMENSION &&
+      file.size <= blob.size
+    ) return file;
     if (blob.size > FACE_UPLOAD_MAX_BYTES) throw new Error("compressed_too_large");
 
     const baseName = file.name.replace(/\.[^.]+$/, "") || "face";

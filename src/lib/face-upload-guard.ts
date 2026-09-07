@@ -4,6 +4,9 @@ export const FACE_MAX_BYTES = 4 * 1024 * 1024;
 export const FACE_MULTIPART_OVERHEAD_BYTES = 128 * 1024;
 export const FACE_MAX_REQUEST_BYTES =
   FACE_MAX_BYTES + FACE_MULTIPART_OVERHEAD_BYTES;
+// Face photos are compressed to 1800px on the customer path, but the server
+// also needs a ceiling for direct callers and decompression-bomb headers.
+export const FACE_MAX_DIMENSION = 4096;
 
 export type FaceContentLengthDecision =
   | { ok: true; bytes: number }
@@ -28,4 +31,15 @@ export function validateFaceUploadContentLength(
 
 export function faceFileFitsBeforeBuffering(size: number): boolean {
   return Number.isSafeInteger(size) && size > 0 && size <= FACE_MAX_BYTES;
+}
+
+export function faceImageDimensionsFit(width: number, height: number): boolean {
+  return (
+    Number.isSafeInteger(width) &&
+    Number.isSafeInteger(height) &&
+    width > 0 &&
+    height > 0 &&
+    width <= FACE_MAX_DIMENSION &&
+    height <= FACE_MAX_DIMENSION
+  );
 }

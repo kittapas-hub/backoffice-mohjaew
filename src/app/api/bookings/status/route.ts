@@ -20,5 +20,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  return NextResponse.json({ status: booking.status, reference: booking.reference });
+  return NextResponse.json({
+    status: booking.status,
+    reference: booking.reference,
+    paymentStatus: booking.paymentStatus,
+  });
 }

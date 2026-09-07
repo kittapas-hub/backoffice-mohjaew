@@ -26,6 +26,7 @@ function readSrc(rel: string) {
 }
 
 const migration = readMigration("0008_reject_expired_hold_confirmation.sql");
+const manualReviewGuardMigration = readMigration("0018_guard_manual_review_booking_override.sql");
 
 // ===========================================================================
 // [SQL] Migration replaces transition_slot_booking with the same signature.
@@ -35,6 +36,20 @@ assert.match(
   /create or replace function public\.transition_slot_booking\(\s*p_booking_id uuid,\s*p_to\s+text\s*\)/,
   "0008 must replace transition_slot_booking(uuid, text)",
 );
+
+// A booking-only admin override must lock payment orders first and reject an
+// existing manual-review claim. Manual approval has its own restricted RPC.
+assert.match(
+  manualReviewGuardMigration,
+  /from public\.payment_orders[\s\S]*order by created_at, id[\s\S]*for update/,
+  "manual-review override guard must lock payment orders before the booking",
+);
+assert.match(
+  manualReviewGuardMigration,
+  /status = 'manual_review'[\s\S]*raise exception 'payment_review_required'/,
+  "manual-review payment claims must block booking-only confirmation",
+);
+assert.doesNotMatch(manualReviewGuardMigration, /security definer/i);
 
 // [SQL] The hold_expired guard must run for pending_payment -> confirmed,
 // checking hold_expires_at against now(), BEFORE the capacity/slot_full logic.
@@ -138,6 +153,12 @@ assert.match(
   /select\("status, slot_id, hold_expires_at"\)/,
   "confirmPayment must read the booking's own hold_expires_at column",
 );
+assert.match(
+  actionsSrc,
+  /\.from\("payment_orders"\)[\s\S]*\.eq\("status", "manual_review"\)/,
+  "booking override action must fail closed when a manual-review order exists",
+);
+assert.match(actionsSrc, /error=payment_review_required/);
 assert.match(
   actionsSrc,
   /new Date\(booking\.hold_expires_at\)\.getTime\(\)\s*<=\s*Date\.now\(\)/,

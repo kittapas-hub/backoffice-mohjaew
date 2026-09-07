@@ -171,24 +171,33 @@ export type BookingTokenData = {
   holdExpiresAt: string | null;
   slotLabel: string | null;   // bookings.preferred_time
   bookingDate: string | null; // booking_slots.booking_date (YYYY-MM-DD)
+  paymentStatus: string | null; // latest payment order status; "unknown" fails closed
 };
 
 /** Looks up non-PII booking data by the full booking UUID (token).
- *  Selects only id, status, queue_number, hold_expires_at, preferred_time, and
- *  the related slot's booking_date — no name / phone / birth date returned. */
+ *  Selects only non-PII booking fields plus the latest payment-order status. */
 export async function getBookingByToken(
   token: string,
 ): Promise<BookingTokenData | null> {
   if (!UUID_RE.test(token)) return null;
 
   const db = supabaseAdmin();
-  const { data, error } = await db
-    .from("bookings")
-    .select(
-      "id, status, queue_number, hold_expires_at, preferred_time, booking_slots(booking_date)",
-    )
-    .eq("id", token)
-    .single();
+  const [{ data, error }, { data: paymentOrder, error: paymentError }] = await Promise.all([
+    db
+      .from("bookings")
+      .select(
+        "id, status, queue_number, hold_expires_at, preferred_time, booking_slots(booking_date)",
+      )
+      .eq("id", token)
+      .single(),
+    db
+      .from("payment_orders")
+      .select("status")
+      .eq("booking_id", token)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
   if (error || !data) return null;
 
@@ -212,6 +221,10 @@ export async function getBookingByToken(
     holdExpiresAt: row.hold_expires_at,
     slotLabel: row.preferred_time,
     bookingDate: slotRow?.booking_date ?? null,
+    // A payment-status read failure must not look like "no payment order". The
+    // success page treats this sentinel as do-not-pay until the next poll can
+    // establish whether a slip is already under review.
+    paymentStatus: paymentError ? "unknown" : (paymentOrder?.status ?? null),
   };
 }
 

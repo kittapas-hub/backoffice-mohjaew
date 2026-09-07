@@ -12,6 +12,7 @@ export function buildEvidence(slip: NormalizedSlipVerification) {
     transfer_at: slip.transferTimestamp?.toISOString() ?? null,
     amount_satang: slip.amountSatang,
     currency: slip.currency,
+    provider_duplicate: slip.duplicateSignal,
     receiver_bank: slip.receiver.bankShort,
     receiver_account_masked: slip.receiver.accountMasked,
     receiver_proxy_masked: slip.receiver.proxyMasked,

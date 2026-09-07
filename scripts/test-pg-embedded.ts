@@ -13,7 +13,7 @@
 //      require (384 legacy hourly open slots across 32 dates, zero
 //      canonical session rows, zero referencing bookings) and verifies it
 //      before proceeding.
-//   5. Applies 0010, 0011, 0012, 0013.
+//   5. Applies 0010, 0011, 0012, 0013, and payment hardening 0018-0019.
 //   6. Runs `npm run test:pg` as a child process with PG_INTEGRATION_URL set
 //      ONLY on that child's environment — never exported to this process or
 //      any other command.
@@ -216,7 +216,9 @@ try {
   await runPassFailVerifier("verify_0013_production_preflight.sql");
   await applyMigration("0013_payment_slip_notification_image.sql");
   await runPassFailVerifier("verify_0013_post_migration.sql");
-  console.log("[test-pg-embedded] all migrations 0001-0013 applied successfully.");
+  await applyMigration("0018_guard_manual_review_booking_override.sql");
+  await applyMigration("0019_recover_provider_duplicate_slip.sql");
+  console.log("[test-pg-embedded] booking/payment migrations through 0019 applied successfully.");
 
   await client.end();
 

@@ -3,9 +3,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  FACE_MAX_DIMENSION,
   FACE_MAX_BYTES,
   FACE_MAX_REQUEST_BYTES,
   faceFileFitsBeforeBuffering,
+  faceImageDimensionsFit,
   validateFaceUploadContentLength,
 } from "./face-upload-guard.ts";
 
@@ -23,6 +25,9 @@ assert.deepEqual(
 assert.equal(validateFaceUploadContentLength(String(FACE_MAX_REQUEST_BYTES)).ok, true);
 assert.equal(faceFileFitsBeforeBuffering(FACE_MAX_BYTES), true);
 assert.equal(faceFileFitsBeforeBuffering(FACE_MAX_BYTES + 1), false);
+assert.equal(faceImageDimensionsFit(FACE_MAX_DIMENSION, FACE_MAX_DIMENSION), true);
+assert.equal(faceImageDimensionsFit(FACE_MAX_DIMENSION + 1, 100), false);
+assert.equal(faceImageDimensionsFit(0, 100), false);
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const route = readFileSync(
@@ -38,5 +43,20 @@ assert.ok(
   "Content-Length guard must run before multipart parsing",
 );
 assert.match(route, /sniffImage\(buffer\)/, "face-upload must sniff real image bytes");
+assert.match(
+  route,
+  /faceImageDimensionsFit\(meta\.width, meta\.height\)/,
+  "face-upload must cap image dimensions after byte sniffing",
+);
+assert.match(
+  route,
+  /\.from\("booking-faces"\)\s*\n\s*\.list\("faces"/,
+  "idempotent retries must verify that the pending face object is ready",
+);
+assert.match(
+  route,
+  /remove\(\[storagePath\]\)/,
+  "failed face storage uploads must clean a possible partial object",
+);
 
 console.log("face-upload guard self-check passed");

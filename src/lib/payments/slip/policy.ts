@@ -84,9 +84,13 @@ export function evaluateSlipPolicy(
   void _opts;
   const txRef = slip.providerTransactionReference?.trim() ?? "";
   if (!txRef) return { ok: false, code: "tx_ref_missing" };
-  // EasySlip is called with checkDuplicate=true. Any value other than the
-  // explicit fresh-slip signal must fail closed before the confirmation RPC.
-  if (slip.duplicateSignal !== false) {
+  // EasySlip always returns a duplicate decision when checkDuplicate=true.
+  // Missing/ambiguous data fails closed. A positive duplicate signal must
+  // still reach the atomic local ledger: the provider marks even a retry
+  // after an interrupted first verification as duplicate. The DB either
+  // recognizes the existing local claim or claims it into manual_review;
+  // it never auto-confirms a provider-marked duplicate.
+  if (slip.duplicateSignal === null) {
     return { ok: false, code: "duplicate_tx" };
   }
 

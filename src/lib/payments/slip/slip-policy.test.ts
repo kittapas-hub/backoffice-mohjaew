@@ -21,8 +21,8 @@ assert.deepEqual(evaluateSlipPolicy(slip), { ok: true });
 assert.deepEqual(evaluateSlipPolicy({ ...slip, providerTransactionReference: " " }), { ok: false, code: "tx_ref_missing" });
 assert.deepEqual(
   evaluateSlipPolicy({ ...slip, duplicateSignal: true }),
-  { ok: false, code: "duplicate_tx" },
-  "a provider-marked duplicate with an unseen local reference must be blocked",
+  { ok: true },
+  "a provider-marked duplicate must reach the local ledger for safe retry recovery",
 );
 assert.deepEqual(
   evaluateSlipPolicy({ ...slip, duplicateSignal: null }),

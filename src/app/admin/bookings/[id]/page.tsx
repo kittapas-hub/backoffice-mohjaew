@@ -32,6 +32,19 @@ const PAYMENT_STATUS_LABEL: Record<string, string> = {
   failed: "❌ ไม่สำเร็จ",
 };
 
+const PAYMENT_REVIEW_REASON_LABEL: Record<string, string> = {
+  amount_mismatch: "ยอดที่รับไม่ตรงกับยอดออเดอร์",
+  receiver_mismatch: "บัญชีผู้รับไม่ตรงกับโปรไฟล์ร้าน",
+  currency_mismatch: "สกุลเงินไม่ตรง",
+  timestamp_out_of_window: "เวลาโอนอยู่นอกช่วงชำระ",
+  hold_expired: "หมดเวลาถือคิวก่อนระบบยืนยัน",
+  order_expired: "ออเดอร์ชำระเงินหมดอายุ",
+  provider_duplicate: "ผู้ให้บริการเคยตรวจสลิปนี้แล้ว — ต้องตรวจสอบรายการเดิม",
+  booking_confirmed: "คิวถูกยืนยันด้วยช่องทางอื่นแล้ว",
+  booking_cancelled: "คิวถูกยกเลิกแล้ว",
+  booking_expired: "คิวหมดอายุแล้ว",
+};
+
 export const dynamic = "force-dynamic";
 
 export default async function BookingDetail({
@@ -71,12 +84,15 @@ export default async function BookingDetail({
   let evidenceKnown = false;
   let slipImageCount = 0;
   let evidenceFailureCount = 0;
+  let slipSignedUrl: string | null = null;
   if (latestOrder) {
     const [imgRes, failRes] = await Promise.all([
       db
         .from("payment_slip_images")
-        .select("id", { count: "exact", head: true })
-        .eq("payment_order_id", latestOrder.id),
+        .select("id, storage_path", { count: "exact" })
+        .eq("payment_order_id", latestOrder.id)
+        .order("created_at", { ascending: false })
+        .limit(1),
       db
         .from("payment_slip_evidence_failures")
         .select("id", { count: "exact", head: true })
@@ -86,8 +102,20 @@ export default async function BookingDetail({
       evidenceKnown = true;
       slipImageCount = imgRes.count ?? 0;
       evidenceFailureCount = failRes.count ?? 0;
+      const latestSlip = imgRes.data?.[0];
+      if (latestSlip) {
+        const { data: signedSlip } = await db.storage
+          .from("payment-slips")
+          .createSignedUrl(latestSlip.storage_path, 300);
+        slipSignedUrl = signedSlip?.signedUrl ?? null;
+      }
     }
   }
+
+  const holdLive = Boolean(
+    booking.hold_expires_at &&
+      new Date(booking.hold_expires_at).getTime() > Date.now(),
+  );
 
   return (
     <div className="max-w-5xl">
@@ -171,11 +199,28 @@ export default async function BookingDetail({
                 value={`${(latestOrder.amount_received_satang / 100).toLocaleString("th-TH")} บาท`}
               />
             )}
+            {latestOrder.status === "manual_review" && latestOrder.failure_code && (
+              <Field
+                label="เหตุผลที่ต้องตรวจสอบ"
+                value={PAYMENT_REVIEW_REASON_LABEL[latestOrder.failure_code] ?? "เหตุผลอื่น — ตรวจหลักฐานก่อนดำเนินการ"}
+              />
+            )}
           </dl>
           {latestOrder.status === "manual_review" && (
             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
               ⚠️ ออเดอร์นี้ต้องได้รับการตรวจสอบด้วยตนเอง (ยอดไม่ตรง หรือจองหมดอายุก่อนรับเงิน)
             </p>
+          )}
+          {slipSignedUrl && (
+            <div className="admin-card mt-3 p-4">
+              <p className="mb-2 text-sm font-semibold">สลิปล่าสุด (ลิงก์ส่วนตัว 5 นาที)</p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={slipSignedUrl}
+                alt="หลักฐานสลิปชำระเงินล่าสุด"
+                className="max-h-[32rem] max-w-full rounded-lg border border-gray-200 object-contain"
+              />
+            </div>
           )}
         </section>
       )}
@@ -214,16 +259,22 @@ export default async function BookingDetail({
               // applied to production — so this specific transition must
               // never go through the generic form.
               booking.status === "pending_payment" && to === "confirmed" ? (
-                <ConfirmPaymentButton
-                  key={to}
-                  bookingId={booking.id}
-                  nickname={booking.nickname}
-                  phone={booking.phone}
-                  slotInfo={null}
-                  refCode={booking.id.slice(0, 8).toUpperCase()}
-                  redirectTo={`/admin/bookings/${booking.id}`}
-                  verifiedClaimAvailable={latestOrder?.status === "manual_review"}
-                />
+                holdLive ? (
+                  <ConfirmPaymentButton
+                    key={to}
+                    bookingId={booking.id}
+                    nickname={booking.nickname}
+                    phone={booking.phone}
+                    slotInfo={null}
+                    refCode={booking.id.slice(0, 8).toUpperCase()}
+                    redirectTo={`/admin/bookings/${booking.id}`}
+                    verifiedClaimAvailable={latestOrder?.status === "manual_review"}
+                  />
+                ) : (
+                  <p key={to} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    หมดเวลาถือคิวแล้ว ไม่สามารถยืนยันคิวนี้ได้ กรุณาตรวจสอบการคืนเงินและให้ลูกค้าจองคิวใหม่
+                  </p>
+                )
               ) : (
                 <form key={to} action={transitionSlotBooking}>
                   <input type="hidden" name="bookingId" value={booking.id} />

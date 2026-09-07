@@ -9,11 +9,16 @@ import { SlipVerificationLink } from "./SlipVerificationLink";
 import { STATUS_POLL_INTERVAL_MS, shouldPollStatus } from "./helpers";
 import { STATUS_INFO, formatThaiDate, Wrapper, IconCircle, Row } from "./ui";
 
-type StatusResponse = { status: string; reference: string };
+type StatusResponse = {
+  status: string;
+  reference: string;
+  paymentStatus: string | null;
+};
 
 export function BookingStatusPanel(props: {
   token: string;
   initialStatus: string;
+  initialPaymentStatus: string | null;
   reference: string;
   bookingDate: string | null;
   slotLabel: string | null;
@@ -32,6 +37,7 @@ export function BookingStatusPanel(props: {
   slipOrderUrl?: string | null;
 }) {
   const [status, setStatus] = useState(props.initialStatus);
+  const [paymentStatus, setPaymentStatus] = useState(props.initialPaymentStatus);
 
   // Local, client-clock-only signal that the hold deadline has passed. This
   // NEVER overrides server-confirmed state: it only gates which payment
@@ -65,8 +71,11 @@ export function BookingStatusPanel(props: {
         );
         if (!res.ok) return;
         const data = (await res.json()) as Partial<StatusResponse>;
-        if (!cancelled && data.status && data.status !== status) {
-          setStatus(data.status);
+        if (!cancelled) {
+          if (data.status && data.status !== status) setStatus(data.status);
+          if (data.paymentStatus !== undefined) {
+            setPaymentStatus(data.paymentStatus);
+          }
         }
       } catch {
         // Transient network error — the next tick retries.
@@ -79,6 +88,69 @@ export function BookingStatusPanel(props: {
       clearInterval(id);
     };
   }, [status, props.token]);
+
+  // Payment review is distinct from booking status. It takes precedence over
+  // pending/expired booking copy because the system has already accepted a
+  // real slip for staff resolution; asking the customer to pay again is unsafe.
+  if (paymentStatus === "manual_review") {
+    return (
+      <Wrapper>
+        <IconCircle tone="review">🕓</IconCircle>
+        <h1 className="checkout-title">อยู่ระหว่างการตรวจสอบ</h1>
+        <p className="checkout-subtitle">
+          ระบบได้รับสลิปแล้ว ไม่ต้องโอนเงินหรืออัปโหลดสลิปซ้ำ
+        </p>
+        <div className="checkout-card" style={{ marginTop: 20, textAlign: "left" }}>
+          <dl className="checkout-rows">
+            <Row label="เลขอ้างอิง" value={props.reference} strong />
+            <Row label="วันที่" value={formatThaiDate(props.bookingDate)} />
+            <Row label="รอบเซสชัน" value={props.slotLabel ?? "-"} />
+          </dl>
+        </div>
+        {props.lineHref && (
+          <a
+            href={props.lineHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="checkout-link"
+            style={{ marginTop: 16 }}
+          >
+            ติดต่อทีมงานทาง LINE
+          </a>
+        )}
+      </Wrapper>
+    );
+  }
+
+  if (paymentStatus === "unknown") {
+    return (
+      <Wrapper>
+        <IconCircle tone="review">⚠️</IconCircle>
+        <h1 className="checkout-title">ยังตรวจสอบสถานะการชำระเงินไม่ได้</h1>
+        <p className="checkout-subtitle">
+          กรุณาอย่าโอนเงินหรืออัปโหลดสลิปซ้ำในขณะนี้ แล้วลองเปิดหน้านี้ใหม่หรือติดต่อทีมงาน
+        </p>
+        <div className="checkout-card" style={{ marginTop: 20, textAlign: "left" }}>
+          <dl className="checkout-rows">
+            <Row label="เลขอ้างอิง" value={props.reference} strong />
+            <Row label="วันที่" value={formatThaiDate(props.bookingDate)} />
+            <Row label="รอบเซสชัน" value={props.slotLabel ?? "-"} />
+          </dl>
+        </div>
+        {props.lineHref && (
+          <a
+            href={props.lineHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="checkout-link"
+            style={{ marginTop: 16 }}
+          >
+            ติดต่อทีมงานทาง LINE
+          </a>
+        )}
+      </Wrapper>
+    );
+  }
 
   // ── Non-pending_payment status: same card whether from the initial load
   // or a live poll update — no manual refresh needed. ────────────────────────

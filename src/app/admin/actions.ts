@@ -80,11 +80,24 @@ export async function confirmBookingOverride(formData: FormData) {
 
   const db = supabaseAdmin();
 
-  const { data: booking } = await db
-    .from("bookings")
-    .select("status, slot_id, hold_expires_at")
-    .eq("id", id)
-    .maybeSingle();
+  const [{ data: booking }, { count: reviewCount, error: reviewError }] =
+    await Promise.all([
+      db
+        .from("bookings")
+        .select("status, slot_id, hold_expires_at")
+        .eq("id", id)
+        .maybeSingle(),
+      db
+        .from("payment_orders")
+        .select("id", { count: "exact", head: true })
+        .eq("booking_id", id)
+        .eq("status", "manual_review"),
+    ]);
+
+  if (reviewError || (reviewCount ?? 0) > 0) {
+    const sep = redirectTo.includes("?") ? "&" : "?";
+    redirect(`${redirectTo}${sep}error=payment_review_required`);
+  }
 
   if (booking?.status !== "pending_payment" || !booking.slot_id) {
     const sep = redirectTo.includes("?") ? "&" : "?";

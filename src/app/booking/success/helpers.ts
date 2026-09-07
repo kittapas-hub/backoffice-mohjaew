@@ -11,6 +11,20 @@ export function formatMmSs(ms: number): string {
 // never points at a generic LINE landing page.
 export const MOHJAEW_LINE_OA_ID = "695bosga";
 
+function configuredLineOaId(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (
+      url.protocol !== "https:" ||
+      !["line.me", "www.line.me"].includes(url.hostname.toLowerCase())
+    ) return null;
+    const match = url.pathname.match(/^\/R\/ti\/p\/@([A-Za-z0-9._-]+)$/i);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build a LINE OA message deep link with pre-filled text, always targeting
  * the real Mohjaew OA (@695bosga) — never a generic LINE page. Extracts the
@@ -19,8 +33,7 @@ export const MOHJAEW_LINE_OA_ID = "695bosga";
  * MOHJAEW_LINE_OA_ID rather than returning the unmatched URL as-is.
  */
 export function buildLineHref(lineOaUrl: string, prefillText: string): string {
-  const match = lineOaUrl.match(/\/@([^/?#]+)/);
-  const oaId = match ? match[1] : MOHJAEW_LINE_OA_ID;
+  const oaId = configuredLineOaId(lineOaUrl) ?? MOHJAEW_LINE_OA_ID;
   return `https://line.me/R/oaMessage/@${oaId}?text=${encodeURIComponent(prefillText)}`;
 }
 

@@ -10,7 +10,12 @@ import { getPaymentOrderByCheckoutToken } from "@/lib/payments/payment-orders";
 import { paymentConfig, slipVerificationConfig } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { SlipUpload } from "./SlipUpload";
-import { isSlipUploadReady } from "./pay-page-gate";
+import { PaymentDeadlineGate } from "./PaymentDeadlineGate";
+import {
+  isPaymentDeadlinePassed,
+  isSlipUploadReady,
+  resolvePaymentDeadline,
+} from "./pay-page-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -72,7 +77,7 @@ export default async function PayPage({
   const db = supabaseAdmin();
   const { data: bookingRow } = await db
     .from("bookings")
-    .select("status, preferred_time, booking_slots(booking_date)")
+    .select("status, preferred_time, hold_expires_at, booking_slots(booking_date)")
     .eq("id", order.booking_id)
     .maybeSingle();
 
@@ -86,11 +91,18 @@ export default async function PayPage({
   // customer should NOT be shown the upload form again (it would only 409).
   const isUnderReview = order.status === "manual_review";
 
+  const paymentDeadline = resolvePaymentDeadline(
+    order.expires_at,
+    bookingRow?.hold_expires_at,
+  );
+
   const isExpiredOrClosed =
     order.status === "expired" ||
     order.status === "failed" ||
     bookingRow?.status === "expired" ||
-    bookingRow?.status === "cancelled";
+    bookingRow?.status === "cancelled" ||
+    bookingRow?.status !== "pending_payment" ||
+    isPaymentDeadlinePassed(paymentDeadline);
 
   // Payment truth: only the payment order proves money was received.
   // Booking status (confirmed, completed) is about admin actions, not payment.
@@ -106,12 +118,21 @@ export default async function PayPage({
   };
   const bookingStatusLabel =
     (bookingRow?.status && BOOKING_STATUS_LABEL[bookingRow.status]) ?? "-";
+  const bookingConfirmed =
+    bookingRow?.status === "confirmed" || bookingRow?.status === "completed";
+  const bookingClosedAfterPayment =
+    bookingRow?.status === "cancelled" || bookingRow?.status === "expired";
+  const paidSubtitle = bookingClosedAfterPayment
+    ? "ระบบได้รับการชำระเงินแล้ว แต่รายการจองสิ้นสุดแล้ว กรุณาติดต่อทีมงาน"
+    : bookingConfirmed
+      ? "คิวของคุณได้รับการยืนยันแล้ว"
+      : "ระบบได้รับการชำระเงินแล้ว ทีมงานกำลังตรวจสอบและยืนยันคิวของคุณ";
 
   const summaryCard = (
     <div className="checkout-card checkout-summary">
       <h2 className="checkout-card-title">สรุปการชำระเงิน</h2>
       <dl className="checkout-rows">
-        <Row label="เลขอ้างอิง" value={order.id.slice(0, 8).toUpperCase()} />
+        <Row label="เลขอ้างอิง" value={order.booking_id.slice(0, 8).toUpperCase()} />
         <Row
           label="จำนวนเงิน"
           value={`${(order.amount_satang / 100).toLocaleString("th-TH")} บาท`}
@@ -134,13 +155,19 @@ export default async function PayPage({
         tone="success"
         icon="✅"
         title="ชำระเงินแล้ว"
-        subtitle="คิวของคุณได้รับการยืนยันแล้ว"
+        subtitle={paidSubtitle}
       >
         {summaryCard}
-        <div className="checkout-alert" data-tone="success" style={{ marginTop: 16 }}>
+        <div
+          className="checkout-alert"
+          data-tone={bookingClosedAfterPayment ? "warn" : "success"}
+          style={{ marginTop: 16 }}
+        >
           <p className="checkout-alert-title">ชำระเงินสำเร็จแล้ว</p>
           <p className="checkout-alert-body">
-            สถานะคิวของคุณแสดงในหัวข้อ &ldquo;สถานะการจอง&rdquo; ด้านบน
+            {bookingClosedAfterPayment
+              ? "กรุณาติดต่อทีมงานเพื่อตรวจสอบสถานะการจองและการชำระเงิน"
+              : "สถานะคิวของคุณแสดงในหัวข้อ “สถานะการจอง” ด้านบน"}
           </p>
         </div>
       </Centered>
@@ -160,7 +187,7 @@ export default async function PayPage({
         <div className="checkout-alert" data-tone="review" style={{ marginTop: 16 }}>
           <p className="checkout-alert-title">ทีมงานกำลังตรวจสอบ</p>
           <p className="checkout-alert-body">
-            ไม่ต้องอัปโหลดสลิปซ้ำ หากต้องการสอบถามเพิ่มเติม กรุณาติดต่อทีมงานทาง LINE พร้อมเลขอ้างอิงด้านบน
+            ไม่ต้องโอนเงินหรืออัปโหลดสลิปซ้ำ หากต้องการสอบถามเพิ่มเติม กรุณาติดต่อทีมงานทาง LINE พร้อมเลขอ้างอิงด้านบน
           </p>
         </div>
       </Centered>
@@ -184,24 +211,26 @@ export default async function PayPage({
 
   // ── Payable: summary + payment action, one coherent checkout ─────────────
   return (
-    <main className="checkout-page">
-      <div className="checkout-shell checkout-shell-wide">
-        <div className="checkout-hero">
-          <div className="checkout-badge">💳</div>
-          <h1 className="checkout-title">ชำระเงิน</h1>
-          <p className="checkout-subtitle">
-            โอนเงินแล้วอัปโหลดสลิปเพื่อยืนยันคิวของคุณ
-          </p>
-        </div>
+    <PaymentDeadlineGate deadline={paymentDeadline!}>
+      <main className="checkout-page">
+        <div className="checkout-shell checkout-shell-wide">
+          <div className="checkout-hero">
+            <div className="checkout-badge">💳</div>
+            <h1 className="checkout-title">ชำระเงิน</h1>
+            <p className="checkout-subtitle">
+              โอนเงินแล้วอัปโหลดสลิปเพื่อยืนยันคิวของคุณ
+            </p>
+          </div>
 
-        <div className="checkout-grid" data-cols="2">
-          <div className="checkout-summary-col">{summaryCard}</div>
-          <div>
-            <PayableSection token={token} />
+          <div className="checkout-grid" data-cols="2">
+            <div className="checkout-summary-col">{summaryCard}</div>
+            <div>
+              <PayableSection token={token} />
+            </div>
           </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </PaymentDeadlineGate>
   );
 }
 

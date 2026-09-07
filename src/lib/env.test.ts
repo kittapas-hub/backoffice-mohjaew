@@ -115,4 +115,22 @@ const STALE_GROUP_ID = "C" + "2".repeat(32);
   assert.notEqual(observedTo, STALE_GROUP_ID);
 }
 
+// Payment amounts must be valid positive PostgreSQL-int satang values before
+// they can reach an order RPC or be displayed on checkout.
+{
+  const previousAmount = process.env.BOOKING_PAYMENT_AMOUNT_THB;
+  const { paymentAmountSatang } = await import("./env.ts");
+  try {
+    process.env.BOOKING_PAYMENT_AMOUNT_THB = "999";
+    assert.equal(paymentAmountSatang(), 99_900);
+    process.env.BOOKING_PAYMENT_AMOUNT_THB = "0.001";
+    assert.equal(paymentAmountSatang(), null);
+    process.env.BOOKING_PAYMENT_AMOUNT_THB = "1000000000";
+    assert.equal(paymentAmountSatang(), null);
+  } finally {
+    if (previousAmount === undefined) delete process.env.BOOKING_PAYMENT_AMOUNT_THB;
+    else process.env.BOOKING_PAYMENT_AMOUNT_THB = previousAmount;
+  }
+}
+
 console.log("env self-check passed");

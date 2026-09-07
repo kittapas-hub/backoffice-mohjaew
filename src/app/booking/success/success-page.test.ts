@@ -50,6 +50,11 @@ for (const broken of ["", "https://lin.ee/abc123", "https://line.me/en"]) {
     `Broken URL "${broken}" must fall back to the real OA, got: ${fallbackHref}`,
   );
 }
+assert.ok(
+  buildLineHref("https://evil.example/R/ti/p/@attacker", "text")
+    .startsWith(`https://line.me/R/oaMessage/@${MOHJAEW_LINE_OA_ID}?text=`),
+  "an untrusted host must never replace the configured Mohjaew OA",
+);
 
 // --- buildLinePrefill: reference only, no date/time/PII --------------------
 
@@ -94,6 +99,7 @@ assert.equal(STATUS_POLL_INTERVAL_MS, 15_000);
 // unmount.
 // ===========================================================================
 const panelSrc = readFileSync(join(here, "BookingStatusPanel.tsx"), "utf8");
+const bookingCoreSrc = readFileSync(join(here, "../../../lib/booking-core.ts"), "utf8");
 assert.match(panelSrc, /setInterval\(poll, STATUS_POLL_INTERVAL_MS\)/, "must poll on the shared 15s interval constant");
 assert.match(
   panelSrc,
@@ -129,12 +135,40 @@ assert.doesNotMatch(
   /searchParams\.get\("id"\)|searchParams\.get\("bookingId"\)|\.eq\(\s*["']id["']/,
   "must not accept or use a raw booking id as an alternate lookup path",
 );
-// Response must be minimal — no PII fields, no raw row dump.
+// Response must be minimal — booking status plus the latest payment status
+// needed to suppress duplicate-payment instructions; no PII or raw row dump.
 assert.match(
   statusRouteSrc,
-  /NextResponse\.json\(\{ status: booking\.status, reference: booking\.reference \}\)/,
-  "response must be limited to status + reference only",
+  /status: booking\.status,[\s\S]*reference: booking\.reference,[\s\S]*paymentStatus: booking\.paymentStatus/,
+  "response must be limited to booking/payment status plus the reference",
 );
+for (const pii of ["nickname", "phone", "birth_date_text", "consultation_topic"]) {
+  assert.doesNotMatch(statusRouteSrc, new RegExp(pii), `status route must not expose ${pii}`);
+}
+
+assert.match(
+  panelSrc,
+  /paymentStatus === "manual_review"/,
+  "success page must render payment manual_review independently of booking status",
+);
+const reviewBlock = panelSrc.slice(
+  panelSrc.indexOf('paymentStatus === "manual_review"'),
+  panelSrc.indexOf("// ── Non-pending_payment status"),
+);
+assert.match(reviewBlock, /ไม่ต้องโอนเงินหรืออัปโหลดสลิปซ้ำ/);
+assert.doesNotMatch(reviewBlock, /SlipVerificationLink|qrSrc|accountNumber/);
+
+assert.match(
+  bookingCoreSrc,
+  /paymentError \? "unknown"/,
+  "payment-order read failures must fail closed instead of looking unpaid",
+);
+const unknownBlock = panelSrc.slice(
+  panelSrc.indexOf('paymentStatus === "unknown"'),
+  panelSrc.indexOf("// ── Non-pending_payment status"),
+);
+assert.match(unknownBlock, /อย่าโอนเงินหรืออัปโหลดสลิปซ้ำ/);
+assert.doesNotMatch(unknownBlock, /SlipVerificationLink|qrSrc|accountNumber/);
 
 // ===========================================================================
 // LineCta.tsx: exact CTA text + desktop fallback copy.

@@ -364,8 +364,10 @@ export async function POST(
     });
   }
 
-  // Trusted policy checks. Provider duplicates fail here; the independent
-  // local (provider, normalized_tx_ref) uniqueness check remains in the RPC.
+  // Trusted policy checks. A missing provider duplicate decision fails here.
+  // A positive duplicate signal continues to the atomic local ledger, which
+  // can distinguish an idempotent retry from another order's transaction and
+  // otherwise routes the provider-only duplicate to manual review.
   const decision = evaluateSlipPolicy(verified.slip);
   if (!decision.ok) {
     await recordSlipRejection({
