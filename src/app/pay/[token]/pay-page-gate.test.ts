@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { slipVerificationConfig } from "../../../lib/env.ts";
 import { isSlipUploadReady } from "./pay-page-gate.ts";
 
@@ -41,5 +44,31 @@ try {
     else process.env[key] = value;
   }
 }
+
+// ===========================================================================
+// page.tsx: a payment order under manual_review must render the dedicated
+// "under review" state and NEVER fall through to the slip upload form (which
+// would only 409). Static/AST checks — the page needs the Next.js runtime.
+// ===========================================================================
+const here = dirname(fileURLToPath(import.meta.url));
+const pageSrc = readFileSync(join(here, "page.tsx"), "utf8");
+
+assert.match(
+  pageSrc,
+  /const isUnderReview\s*=\s*order\.status === "manual_review";/,
+  "must derive isUnderReview from order.status === manual_review",
+);
+// The manual_review branch must return before PayableSection is reached, so the
+// upload form is never shown for an order already under review.
+const underReviewIdx = pageSrc.indexOf("if (isUnderReview)");
+const payableIdx = pageSrc.indexOf("<PayableSection");
+assert.ok(underReviewIdx > 0, "must have an isUnderReview branch");
+assert.ok(payableIdx > 0, "must still have a payable section for open orders");
+assert.ok(
+  underReviewIdx < payableIdx,
+  "the isUnderReview branch must short-circuit before the payable/upload section",
+);
+assert.match(pageSrc, /อยู่ระหว่างการตรวจสอบ/, "under-review state must tell the customer it is being reviewed");
+assert.match(pageSrc, /ไม่ต้องอัปโหลดสลิปซ้ำ/, "under-review state must tell the customer not to re-upload");
 
 console.log("pay-page gate self-check passed");

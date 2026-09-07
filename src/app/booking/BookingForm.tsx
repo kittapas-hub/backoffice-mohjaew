@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   compressFaceImage,
@@ -205,9 +205,41 @@ export default function BookingForm({
     router.push(`/booking/success?token=${encodeURIComponent(data.token)}`);
   }
 
+  // Compact progress: reflects how much of the single-page flow is done. It is
+  // decorative (each section already has a numbered heading), so it is hidden
+  // from assistive tech to avoid duplicate step announcements.
+  const steps = [
+    { label: "วันที่", done: Boolean(date) },
+    { label: "รอบ", done: Boolean(slotId) },
+    {
+      label: "ข้อมูล",
+      done: Boolean(form.nickname && form.phone && form.birthDateText),
+    },
+    { label: "รูปหน้า", done: Boolean(faceFile) },
+  ];
+  const activeIndex = steps.findIndex((s) => !s.done);
+
   return (
-    <form onSubmit={onSubmit} className="booking-panel">
-      <section className="booking-section">
+    <>
+      <div className="booking-progress" aria-hidden="true">
+        {steps.map((s, i) => (
+          <Fragment key={s.label}>
+            {i > 0 && <span className="booking-progress-bar" />}
+            <div
+              className="booking-progress-step"
+              data-state={
+                s.done ? "done" : i === activeIndex ? "active" : undefined
+              }
+            >
+              <span className="booking-progress-dot">{s.done ? "✓" : i + 1}</span>
+              <span className="booking-progress-label">{s.label}</span>
+            </div>
+          </Fragment>
+        ))}
+      </div>
+
+      <form onSubmit={onSubmit} className="booking-panel">
+        <section className="booking-section">
         <h2 className="booking-section-title">
           <span className="booking-step">1</span>
           เลือกวันนัด
@@ -337,7 +369,7 @@ export default function BookingForm({
         </p>
         <label className="booking-field" style={{ cursor: "pointer" }}>
           <span className="booking-label">
-            รูปหน้าตรง <span style={{ color: "#b42318" }}>*</span>
+            รูปหน้าตรง <span className="booking-required">*</span>
           </span>
           <input
             type="file"
@@ -346,33 +378,23 @@ export default function BookingForm({
             disabled={faceProcessing}
             className="booking-hidden-field"
           />
-          <div
-            style={{
-              border: "1.5px dashed #d7c4bc",
-              borderRadius: 14,
-              padding: "14px 16px",
-              textAlign: "center",
-              background: faceFile ? "#fff8f6" : "#fff",
-              color: faceFile ? "#be3455" : "#9ca3af",
-              fontSize: 14,
-            }}
-          >
+          <div className="booking-dropzone" data-has-file={faceFile ? "true" : undefined}>
             {facePreview ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={facePreview}
                 alt="ตัวอย่างรูปหน้า"
-                style={{ maxHeight: 160, maxWidth: "100%", borderRadius: 10, margin: "0 auto" }}
+                className="booking-dropzone-preview"
               />
+            ) : faceProcessing ? (
+              "กำลังปรับขนาดรูป..."
             ) : (
-              faceProcessing
-                ? "กำลังปรับขนาดรูป..."
-                : "แตะหรือคลิกเพื่อเลือกรูป · ระบบบีบอัตโนมัติ (ต้นฉบับสูงสุด 20 MB)"
+              "แตะหรือคลิกเพื่อเลือกรูป · ระบบบีบอัตโนมัติ (ต้นฉบับสูงสุด 20 MB)"
             )}
           </div>
         </label>
         {faceFile && (
-          <p style={{ margin: "6px 0 0", fontSize: 12, color: "#6b7280" }}>
+          <p className="booking-dropzone-meta">
             {faceFile.name} ({(faceFile.size / 1024).toFixed(0)} KB)
             {faceOriginalBytes && faceOriginalBytes > faceFile.size + 64 * 1024
               ? ` · ลดจาก ${(faceOriginalBytes / 1024 / 1024).toFixed(1)} MB อัตโนมัติ`
@@ -395,6 +417,7 @@ export default function BookingForm({
           เมื่อจองแล้วระบบจะถือคิวให้ {holdMinutes} นาที เพื่อรอการชำระเงิน
         </p>
       </section>
-    </form>
+      </form>
+    </>
   );
 }

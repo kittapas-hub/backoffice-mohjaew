@@ -55,19 +55,16 @@ export default async function PayPage({
 
   if (!order) {
     return (
-      <Wrapper>
-        <div className="mb-4 text-4xl">🔍</div>
-        <h1 className="text-xl font-bold text-gray-700">ไม่พบรายการชำระเงิน</h1>
-        <p className="mt-2 text-sm text-gray-500">
-          ลิงก์อาจหมดอายุหรือไม่ถูกต้อง
-        </p>
-        <Link
-          href="/booking"
-          className="mt-6 inline-block rounded-xl bg-rose-600 px-6 py-2.5 text-sm font-semibold text-white"
-        >
+      <Centered
+        tone="neutral"
+        icon="🔍"
+        title="ไม่พบรายการชำระเงิน"
+        subtitle="ลิงก์อาจหมดอายุหรือไม่ถูกต้อง"
+      >
+        <Link href="/booking" className="checkout-btn" style={{ marginTop: 20 }}>
           จองคิวใหม่
         </Link>
-      </Wrapper>
+      </Centered>
     );
   }
 
@@ -83,6 +80,11 @@ export default async function PayPage({
     ? bookingRow.booking_slots[0]
     : bookingRow?.booking_slots;
   const bookingDate = slotRow?.booking_date ?? null;
+
+  // Payment order is under team review (e.g. late-but-verified transfer, or a
+  // provider result that needs a human). Distinct from paid/expired: the
+  // customer should NOT be shown the upload form again (it would only 409).
+  const isUnderReview = order.status === "manual_review";
 
   const isExpiredOrClosed =
     order.status === "expired" ||
@@ -105,60 +107,100 @@ export default async function PayPage({
   const bookingStatusLabel =
     (bookingRow?.status && BOOKING_STATUS_LABEL[bookingRow.status]) ?? "-";
 
-  return (
-    <main className="mx-auto min-h-screen max-w-md px-5 py-10">
-      <div className="mb-6 text-center">
-        <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-rose-100 text-3xl">
-          {isPaid ? "✅" : isExpiredOrClosed ? "⏰" : "💳"}
-        </div>
-        <h1 className="text-2xl font-bold text-rose-700">
-          {isPaid
-            ? "ชำระเงินแล้ว"
-            : isExpiredOrClosed
-              ? "รายการหมดอายุ"
-              : "ชำระเงิน"}
-        </h1>
-      </div>
+  const summaryCard = (
+    <div className="checkout-card checkout-summary">
+      <h2 className="checkout-card-title">สรุปการชำระเงิน</h2>
+      <dl className="checkout-rows">
+        <Row label="เลขอ้างอิง" value={order.id.slice(0, 8).toUpperCase()} />
+        <Row
+          label="จำนวนเงิน"
+          value={`${(order.amount_satang / 100).toLocaleString("th-TH")} บาท`}
+          strong
+        />
+        <Row label="วันที่" value={formatThaiDate(bookingDate)} />
+        <Row label="รอบเวลา" value={bookingRow?.preferred_time ?? "-"} />
+        <Row label="สถานะการจอง" value={bookingStatusLabel} />
+        {!isPaid && !isExpiredOrClosed && !isUnderReview && (
+          <Row label="หมดอายุ" value={formatThaiDateTime(order.expires_at)} />
+        )}
+      </dl>
+    </div>
+  );
 
-      <div className="mb-5 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-        <dl className="space-y-3">
-          <Row label="เลขอ้างอิง" value={order.id.slice(0, 8).toUpperCase()} />
-          <Row
-            label="จำนวนเงิน"
-            value={`${(order.amount_satang / 100).toLocaleString("th-TH")} บาท`}
-          />
-          <Row label="วันที่" value={formatThaiDate(bookingDate)} />
-          <Row label="รอบเวลา" value={bookingRow?.preferred_time ?? "-"} />
-          <Row label="สถานะการจอง" value={bookingStatusLabel} />
-          {!isPaid && !isExpiredOrClosed && (
-            <Row
-              label="หมดอายุ"
-              value={formatThaiDateTime(order.expires_at)}
-            />
-          )}
-        </dl>
-      </div>
-
-      {isPaid ? (
-        <div className="rounded-2xl border border-teal-100 bg-teal-50 p-5 text-center">
-          <p className="font-semibold text-teal-800">ชำระเงินสำเร็จแล้ว</p>
-          <p className="mt-1 text-sm text-teal-700">
+  // ── Paid ───────────────────────────────────────────────────────────────
+  if (isPaid) {
+    return (
+      <Centered
+        tone="success"
+        icon="✅"
+        title="ชำระเงินแล้ว"
+        subtitle="คิวของคุณได้รับการยืนยันแล้ว"
+      >
+        {summaryCard}
+        <div className="checkout-alert" data-tone="success" style={{ marginTop: 16 }}>
+          <p className="checkout-alert-title">ชำระเงินสำเร็จแล้ว</p>
+          <p className="checkout-alert-body">
             สถานะคิวของคุณแสดงในหัวข้อ &ldquo;สถานะการจอง&rdquo; ด้านบน
           </p>
         </div>
-      ) : isExpiredOrClosed ? (
-        <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5 text-center">
-          <p className="font-semibold text-gray-700">รายการนี้หมดอายุแล้ว</p>
-          <Link
-            href="/booking"
-            className="mt-4 inline-block text-sm text-rose-600 hover:underline"
-          >
+      </Centered>
+    );
+  }
+
+  // ── Under team review ────────────────────────────────────────────────────
+  if (isUnderReview) {
+    return (
+      <Centered
+        tone="review"
+        icon="🕓"
+        title="อยู่ระหว่างการตรวจสอบ"
+        subtitle="ระบบได้รับสลิปของคุณแล้ว ทีมงานกำลังตรวจสอบการชำระเงินเพิ่มเติม"
+      >
+        {summaryCard}
+        <div className="checkout-alert" data-tone="review" style={{ marginTop: 16 }}>
+          <p className="checkout-alert-title">ทีมงานกำลังตรวจสอบ</p>
+          <p className="checkout-alert-body">
+            ไม่ต้องอัปโหลดสลิปซ้ำ หากต้องการสอบถามเพิ่มเติม กรุณาติดต่อทีมงานทาง LINE พร้อมเลขอ้างอิงด้านบน
+          </p>
+        </div>
+      </Centered>
+    );
+  }
+
+  // ── Expired / closed ─────────────────────────────────────────────────────
+  if (isExpiredOrClosed) {
+    return (
+      <Centered tone="neutral" icon="⏰" title="รายการหมดอายุ">
+        {summaryCard}
+        <div className="checkout-alert" data-tone="neutral" style={{ marginTop: 16 }}>
+          <p className="checkout-alert-title">รายการนี้หมดอายุแล้ว</p>
+          <Link href="/booking" className="checkout-link" style={{ marginTop: 8 }}>
             จองคิวใหม่
           </Link>
         </div>
-      ) : (
-        <PayableSection token={token} />
-      )}
+      </Centered>
+    );
+  }
+
+  // ── Payable: summary + payment action, one coherent checkout ─────────────
+  return (
+    <main className="checkout-page">
+      <div className="checkout-shell checkout-shell-wide">
+        <div className="checkout-hero">
+          <div className="checkout-badge">💳</div>
+          <h1 className="checkout-title">ชำระเงิน</h1>
+          <p className="checkout-subtitle">
+            โอนเงินแล้วอัปโหลดสลิปเพื่อยืนยันคิวของคุณ
+          </p>
+        </div>
+
+        <div className="checkout-grid" data-cols="2">
+          <div className="checkout-summary-col">{summaryCard}</div>
+          <div>
+            <PayableSection token={token} />
+          </div>
+        </div>
+      </div>
     </main>
   );
 }
@@ -176,23 +218,21 @@ function PayableSection({ token }: { token: string }) {
   const autoVerifyReady = isSlipUploadReady(slipCfg);
 
   return (
-    <>
+    <div className="checkout-stack">
       {hasBankDetails && (
-        <div className="mb-5 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 font-bold">โอนเงินผ่าน PromptPay / บัญชีธนาคาร</h2>
+        <div className="checkout-card">
+          <h2 className="checkout-card-title">โอนเงินผ่าน PromptPay / บัญชีธนาคาร</h2>
           {hasQR && (
-            <div className="mb-5 flex justify-center">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={qrSrc}
-                alt="QR Code สำหรับโอนเงิน"
-                width={220}
-                height={220}
-                className="rounded-xl border border-gray-200"
-              />
-            </div>
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={qrSrc}
+              alt="QR Code สำหรับโอนเงิน"
+              width={220}
+              height={220}
+              className="checkout-qr"
+            />
           )}
-          <dl className="space-y-3">
+          <dl className="checkout-rows">
             <Row label="ธนาคาร" value={cfg.bankName} />
             <Row label="ชื่อบัญชี" value={cfg.accountName} />
             <Row label="เลขบัญชี" value={cfg.accountNumber} />
@@ -203,30 +243,63 @@ function PayableSection({ token }: { token: string }) {
       {autoVerifyReady ? (
         <SlipUpload token={token} />
       ) : (
-        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 text-center">
-          <p className="font-semibold text-amber-800">ส่งสลิปให้ทีมงาน</p>
-          <p className="mt-2 text-sm text-amber-700">
+        <div className="checkout-alert" data-tone="warn">
+          <p className="checkout-alert-title">ส่งสลิปให้ทีมงาน</p>
+          <p className="checkout-alert-body">
             โอนแล้วส่งสลิปให้ทีมงานทาง LINE เพื่อยืนยันคิวของคุณ
           </p>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
-function Wrapper({ children }: { children: React.ReactNode }) {
+// Centered single-column layout for terminal / message states, matching the
+// success page's terminal card so the two pages read as one journey.
+function Centered({
+  tone,
+  icon,
+  title,
+  subtitle,
+  children,
+}: {
+  tone?: "success" | "neutral" | "warn" | "review";
+  icon: string;
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center px-5 py-12 text-center">
-      {children}
+    <main className="checkout-page">
+      <div className="checkout-shell" style={{ maxWidth: 460 }}>
+        <div className="checkout-hero">
+          <div className="checkout-badge" data-tone={tone}>
+            {icon}
+          </div>
+          <h1 className="checkout-title">{title}</h1>
+          {subtitle && <p className="checkout-subtitle">{subtitle}</p>}
+        </div>
+        {children}
+      </div>
     </main>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({
+  label,
+  value,
+  strong,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+}) {
   return (
-    <div className="flex items-center justify-between border-b border-gray-100 pb-2">
-      <dt className="shrink-0 text-sm text-gray-500">{label}</dt>
-      <dd className="ml-3 text-sm">{value}</dd>
+    <div className="checkout-row">
+      <dt className="checkout-row-label">{label}</dt>
+      <dd className="checkout-row-value" data-strong={strong ? "true" : undefined}>
+        <span>{value}</span>
+      </dd>
     </div>
   );
 }

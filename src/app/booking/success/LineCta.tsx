@@ -23,26 +23,26 @@ export function LineCta({
 
   if (expired) {
     return (
-      <p className="py-3 text-center text-sm text-gray-400">
+      <p style={{ padding: "12px 0", textAlign: "center", fontSize: 14, color: "#9ca3af" }}>
         หมดเวลาถือคิวแล้ว — ไม่สามารถส่งสลิปได้
       </p>
     );
   }
 
   return (
-    <>
+    <div>
       <a
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="flex w-full items-center justify-center gap-2 rounded-xl bg-green-500 px-4 py-3 text-base font-semibold text-white shadow-sm hover:bg-green-600 active:bg-green-700"
+        className="checkout-btn checkout-btn-line"
       >
-        <span>💬</span>
+        <span aria-hidden="true">💬</span>
         ส่งสลิปทาง LINE @mohjaew
       </a>
-      <p className="mt-2 hidden text-center text-xs text-gray-400 sm:block">
+      <p className="checkout-note checkout-note-center line-cta-desktop-hint">
         แนะนำให้เปิดผ่านมือถือเพื่อส่งสลิปใน LINE ได้สะดวก
       </p>
-    </>
+    </div>
   );
 }

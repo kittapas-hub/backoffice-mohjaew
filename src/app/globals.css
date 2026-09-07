@@ -300,3 +300,405 @@ body {
     padding-top: 46px;
   }
 }
+
+/* ── Compact 4-step progress (booking) ─────────────────────────────────── */
+.booking-progress {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(190, 52, 85, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.booking-progress-step {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.booking-progress-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 2px solid #e6d3cc;
+  background: #fff;
+  color: #b09a92;
+  font-size: 13px;
+  font-weight: 800;
+  transition: 160ms ease;
+}
+
+.booking-progress-step[data-state="active"] .booking-progress-dot {
+  border-color: var(--mj-primary);
+  color: var(--mj-primary-dark);
+  box-shadow: 0 0 0 4px rgba(190, 52, 85, 0.12);
+}
+
+.booking-progress-step[data-state="done"] .booking-progress-dot {
+  border-color: var(--mj-primary);
+  background: var(--mj-primary);
+  color: #fff;
+}
+
+.booking-progress-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #9a8a86;
+  text-align: center;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.booking-progress-step[data-state="active"] .booking-progress-label,
+.booking-progress-step[data-state="done"] .booking-progress-label {
+  color: var(--mj-primary-dark);
+}
+
+.booking-progress-bar {
+  flex: 0 0 14px;
+  height: 2px;
+  margin-top: 12px; /* ≈ vertical center of the 26px dot */
+  background: #e6d3cc;
+  border-radius: 999px;
+}
+@media (max-width: 380px) {
+  .booking-progress-label { display: none; }
+  .booking-progress-bar { flex-basis: 22px; }
+}
+
+/* ── Booking face dropzone (shared classes, was inline styles) ──────────── */
+.booking-dropzone {
+  border: 1.5px dashed #d7c4bc;
+  border-radius: 14px;
+  padding: 18px 16px;
+  text-align: center;
+  background: #fff;
+  color: #9ca3af;
+  font-size: 14px;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.booking-dropzone[data-has-file="true"] {
+  border-color: var(--mj-primary);
+  background: #fff8f6;
+  color: var(--mj-primary);
+}
+.booking-field:focus-within .booking-dropzone {
+  border-color: var(--mj-primary);
+  box-shadow: 0 0 0 4px rgba(190, 52, 85, 0.13);
+}
+.booking-dropzone-preview {
+  max-height: 168px;
+  max-width: 100%;
+  border-radius: 10px;
+  margin: 0 auto;
+}
+.booking-dropzone-meta {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #6b7280;
+}
+.booking-required { color: #b42318; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Checkout journey — shared by /booking/success and /pay/[token] so the two
+   pages read as one coherent flow with the same warm Mohjaew identity as
+   /booking. Restrained, Stripe-like clarity: calm summary + clear action.
+   ═══════════════════════════════════════════════════════════════════════ */
+.checkout-page {
+  min-height: 100vh;
+  padding: 28px 16px 48px;
+  background:
+    radial-gradient(circle at top right, rgba(244, 114, 182, 0.14), transparent 30rem),
+    linear-gradient(180deg, #fff7f3 0%, #fff 44%, #f9fafb 100%);
+}
+
+.checkout-shell {
+  width: min(100%, 560px);
+  margin: 0 auto;
+}
+
+.checkout-hero {
+  margin-bottom: 18px;
+  text-align: center;
+}
+
+.checkout-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  margin: 0 auto 12px;
+  border-radius: 999px;
+  font-size: 30px;
+  background: #fff1eb;
+  border: 1px solid rgba(190, 52, 85, 0.16);
+}
+.checkout-badge[data-tone="success"] { background: #e7f6f2; border-color: #b7e3d8; }
+.checkout-badge[data-tone="neutral"] { background: #f3f0ef; border-color: #e6dcd9; }
+.checkout-badge[data-tone="warn"] { background: #fdf3e2; border-color: #f2dcae; }
+.checkout-badge[data-tone="review"] { background: #eef4ff; border-color: #cdddfb; }
+
+.checkout-title {
+  margin: 0;
+  font-size: clamp(22px, 6vw, 28px);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--mj-ink);
+}
+
+.checkout-subtitle {
+  margin: 8px 0 0;
+  color: var(--mj-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.checkout-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.checkout-card {
+  border: 1px solid var(--mj-line);
+  border-radius: 22px;
+  background: var(--mj-card);
+  box-shadow: 0 14px 40px rgba(31, 41, 51, 0.07);
+  padding: 22px;
+}
+
+.checkout-card-title {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--mj-ink);
+}
+
+.checkout-summary {
+  background: linear-gradient(180deg, #fff 0%, #fff6f2 100%);
+}
+
+.checkout-rows {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.checkout-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid #f3e7e1;
+}
+.checkout-row:first-child { padding-top: 0; }
+.checkout-row:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.checkout-row-label {
+  flex-shrink: 0;
+  color: var(--mj-muted);
+  font-size: 13px;
+}
+
+.checkout-row-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--mj-ink);
+}
+.checkout-row-value[data-strong="true"] {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.checkout-note {
+  margin: 10px 0 0;
+  color: var(--mj-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.checkout-note-center { text-align: center; }
+
+.checkout-amount-block {
+  text-align: center;
+  padding: 4px 0 2px;
+}
+.checkout-amount-label {
+  margin: 0;
+  color: var(--mj-muted);
+  font-size: 13px;
+}
+.checkout-amount {
+  margin: 2px 0 0;
+  font-size: 40px;
+  line-height: 1.1;
+  font-weight: 800;
+  color: var(--mj-primary-dark);
+  letter-spacing: -0.02em;
+}
+.checkout-amount span {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--mj-primary);
+}
+
+/* Hold countdown */
+.checkout-countdown {
+  margin-top: 16px;
+  border-radius: 14px;
+  padding: 14px;
+  text-align: center;
+  background: #fdf3e2;
+  border: 1px solid #f2dcae;
+}
+.checkout-countdown[data-state="warn"] { background: #fdeede; border-color: #f0c98a; }
+.checkout-countdown[data-state="expired"] { background: #fdecec; border-color: #f3c2c2; }
+.checkout-countdown-deadline {
+  margin: 0;
+  font-size: 13px;
+  color: #8a5a00;
+}
+.checkout-countdown[data-state="warn"] .checkout-countdown-deadline { color: #9a4b00; }
+.checkout-countdown[data-state="expired"] .checkout-countdown-deadline { color: #b42318; }
+.checkout-countdown-time {
+  margin: 6px 0 0;
+  font-size: 30px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #b45309;
+}
+.checkout-countdown[data-state="warn"] .checkout-countdown-time { color: #c2410c; }
+.checkout-countdown-placeholder { height: 36px; }
+
+/* QR */
+.checkout-qr {
+  display: block;
+  margin: 0 auto 18px;
+  border-radius: 14px;
+  border: 1px solid #eadfdc;
+}
+
+/* Buttons */
+.checkout-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  border-radius: 14px;
+  background: var(--mj-primary);
+  color: #fff;
+  padding: 14px 18px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  text-decoration: none;
+  box-shadow: 0 12px 26px rgba(190, 52, 85, 0.22);
+  transition: background 150ms ease;
+}
+.checkout-btn:hover:not(:disabled) { background: var(--mj-primary-dark); }
+.checkout-btn:disabled { cursor: not-allowed; opacity: 0.55; box-shadow: none; }
+
+.checkout-btn-line {
+  background: #06c755;
+  box-shadow: 0 12px 26px rgba(6, 199, 85, 0.22);
+}
+.checkout-btn-line:hover:not(:disabled) { background: #05b34c; }
+
+.checkout-link {
+  display: inline-block;
+  color: var(--mj-primary);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.checkout-link:hover { text-decoration: underline; }
+.checkout-link-muted { color: var(--mj-muted); font-weight: 500; }
+
+.checkout-copy {
+  border: 1px solid #e0cec7;
+  border-radius: 9px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #6f6265;
+  background: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: 120ms ease;
+}
+.checkout-copy:hover { background: #fdf1ee; border-color: var(--mj-primary); color: var(--mj-primary-dark); }
+.checkout-copy[data-copied="true"] { color: var(--mj-accent); border-color: #9ad3ca; background: #edf7f4; }
+
+/* Alerts / status blocks */
+.checkout-alert {
+  border-radius: 14px;
+  padding: 16px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.checkout-alert-title { margin: 0; font-weight: 800; }
+.checkout-alert-body { margin: 6px 0 0; font-size: 13px; }
+.checkout-alert[data-tone="success"] { background: #e7f6f2; border: 1px solid #b7e3d8; color: #0f5f54; }
+.checkout-alert[data-tone="success"] .checkout-alert-title { color: #0b7a68; }
+.checkout-alert[data-tone="warn"] { background: #fdf3e2; border: 1px solid #f2dcae; color: #8a5a00; }
+.checkout-alert[data-tone="warn"] .checkout-alert-title { color: #8a5a00; }
+.checkout-alert[data-tone="review"] { background: #eef4ff; border: 1px solid #cdddfb; color: #33507e; }
+.checkout-alert[data-tone="review"] .checkout-alert-title { color: #294a86; }
+.checkout-alert[data-tone="error"] { background: #fdecec; border: 1px solid #f3c2c2; color: #a02b2b; }
+.checkout-alert[data-tone="error"] .checkout-alert-title { color: #b42318; }
+.checkout-alert[data-tone="neutral"] { background: #f7f4f2; border: 1px solid #e9dfdc; color: #5f5356; }
+
+/* Slip upload progress */
+.checkout-progress-track {
+  height: 8px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #f1e5e0;
+}
+.checkout-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--mj-primary);
+  transition: width 160ms ease;
+}
+.checkout-progress-text { margin: 10px 0 0; text-align: center; font-size: 13px; color: var(--mj-muted); }
+.checkout-verifying { text-align: center; font-size: 14px; font-weight: 700; color: var(--mj-primary-dark); }
+
+.checkout-stack { display: grid; gap: 12px; }
+
+.line-cta-desktop-hint { display: none; }
+@media (min-width: 640px) { .line-cta-desktop-hint { display: block; } }
+
+/* Two-column on wider screens: calm summary beside the action panel. Only
+   shells that opt in (checkout-shell-wide) widen — terminal single-column
+   states keep the narrower, centered measure. */
+@media (min-width: 860px) {
+  .checkout-shell-wide { width: min(100%, 920px); }
+  .checkout-grid[data-cols="2"] {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    align-items: start;
+  }
+  .checkout-grid[data-cols="2"] .checkout-summary-col { position: sticky; top: 28px; }
+}

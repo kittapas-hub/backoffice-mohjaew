@@ -20,6 +20,18 @@ const TRANSITION_LABEL: Record<string, string> = {
   expired: "หมดเวลา",
 };
 
+// Full Thai labels for every payment_order status so staff never see a raw
+// enum. Covers the automatic-slip lifecycle (created/pending -> paid, or
+// manual_review) plus expiry/failure.
+const PAYMENT_STATUS_LABEL: Record<string, string> = {
+  created: "⏳ รอชำระเงิน",
+  pending: "⏳ รอชำระเงิน",
+  paid: "✅ ชำระแล้ว (ตรวจสอบอัตโนมัติ)",
+  manual_review: "⚠️ ต้องตรวจสอบด้วยตนเอง",
+  expired: "⏰ หมดอายุ",
+  failed: "❌ ไม่สำเร็จ",
+};
+
 export const dynamic = "force-dynamic";
 
 export default async function BookingDetail({
@@ -51,6 +63,31 @@ export default async function BookingDetail({
 
   const latestOrder: PaymentOrder | undefined = paymentOrders[0];
   const isUnscheduledLine = booking.source === "line" && !booking.slot_id;
+
+  // Payment-evidence state: is the verified slip image retained, or did
+  // evidence storage fail (durable follow-up record)? Tolerant of the
+  // evidence tables not yet existing in an environment — a query error just
+  // leaves the indicator unknown rather than breaking the whole detail page.
+  let evidenceKnown = false;
+  let slipImageCount = 0;
+  let evidenceFailureCount = 0;
+  if (latestOrder) {
+    const [imgRes, failRes] = await Promise.all([
+      db
+        .from("payment_slip_images")
+        .select("id", { count: "exact", head: true })
+        .eq("payment_order_id", latestOrder.id),
+      db
+        .from("payment_slip_evidence_failures")
+        .select("id", { count: "exact", head: true })
+        .eq("payment_order_id", latestOrder.id),
+    ]);
+    if (!imgRes.error && !failRes.error) {
+      evidenceKnown = true;
+      slipImageCount = imgRes.count ?? 0;
+      evidenceFailureCount = failRes.count ?? 0;
+    }
+  }
 
   return (
     <div className="max-w-5xl">
@@ -95,14 +132,20 @@ export default async function BookingDetail({
           <dl className="admin-card grid grid-cols-1 gap-x-6 gap-y-4 p-6 sm:grid-cols-2">
             <Field
               label="สถานะชำระเงิน"
-              value={
-                latestOrder.status === "manual_review"
-                  ? "⚠️ ต้องตรวจสอบด้วยตนเอง"
-                  : latestOrder.status === "paid"
-                    ? "✅ ชำระแล้ว"
-                    : latestOrder.status
-              }
+              value={PAYMENT_STATUS_LABEL[latestOrder.status] ?? latestOrder.status}
             />
+            {evidenceKnown && (
+              <Field
+                label="หลักฐานสลิป"
+                value={
+                  slipImageCount > 0
+                    ? "✅ มีสลิปบันทึกในระบบ"
+                    : evidenceFailureCount > 0
+                      ? "⚠️ บันทึกสลิปไม่สำเร็จ — ต้องติดตาม"
+                      : "— ไม่มีสลิปอัตโนมัติ"
+                }
+              />
+            )}
             <Field
               label="จำนวนเงิน"
               value={`${(latestOrder.amount_satang / 100).toLocaleString("th-TH")} บาท`}

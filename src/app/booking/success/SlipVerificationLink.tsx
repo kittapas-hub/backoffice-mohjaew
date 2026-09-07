@@ -22,12 +22,15 @@ export function SlipVerificationLink({ orderUrl }: { orderUrl: string }) {
   }
 
   return (
-    <div className="mb-3">
-      <button type="button" onClick={createOrder} disabled={busy}
-        className="block w-full rounded-xl bg-rose-600 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60">
+    <div>
+      <button type="button" onClick={createOrder} disabled={busy} className="checkout-btn">
         {busy ? "กำลังเปิดหน้าส่งสลิป…" : "อัปโหลดสลิป — ยืนยันคิวอัตโนมัติ"}
       </button>
-      {failed && <p className="mt-2 text-center text-xs text-rose-700">ยังเปิดการส่งสลิปไม่ได้ กรุณาติดต่อทีมงาน</p>}
+      {failed && (
+        <p className="checkout-note checkout-note-center" style={{ color: "var(--mj-primary-dark)" }}>
+          ยังเปิดการส่งสลิปไม่ได้ กรุณาติดต่อทีมงาน
+        </p>
+      )}
     </div>
   );
 }

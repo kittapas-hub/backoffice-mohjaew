@@ -22,15 +22,10 @@ export default async function BookingSuccess({
   if (!booking || !token) {
     return (
       <Wrapper>
-        <IconCircle>🔍</IconCircle>
-        <h1 className="text-xl font-bold text-gray-700">ไม่พบข้อมูลการจอง</h1>
-        <p className="mt-2 text-sm text-gray-500">
-          ลิงก์อาจหมดอายุหรือไม่ถูกต้อง
-        </p>
-        <Link
-          href="/booking"
-          className="mt-6 inline-block rounded-xl bg-rose-600 px-6 py-2.5 text-sm font-semibold text-white"
-        >
+        <IconCircle tone="neutral">🔍</IconCircle>
+        <h1 className="checkout-title">ไม่พบข้อมูลการจอง</h1>
+        <p className="checkout-subtitle">ลิงก์อาจหมดอายุหรือไม่ถูกต้อง</p>
+        <Link href="/booking" className="checkout-btn" style={{ marginTop: 20 }}>
           จองคิวใหม่
         </Link>
       </Wrapper>

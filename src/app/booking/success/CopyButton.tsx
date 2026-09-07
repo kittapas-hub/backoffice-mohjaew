@@ -19,7 +19,9 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
     <button
       type="button"
       onClick={handleCopy}
-      className="rounded-md border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-50 active:bg-gray-100"
+      className="checkout-copy"
+      data-copied={copied ? "true" : undefined}
+      aria-label={copied ? "คัดลอกแล้ว" : `${label}`}
     >
       {copied ? "✓ คัดลอกแล้ว" : label}
     </button>

@@ -3,35 +3,42 @@
 // so the confirmed/cancelled/expired card looks identical regardless of
 // whether it was the initial render or a live status-poll update.
 
+type StatusTone = "success" | "neutral" | "warn";
+
 // Status states other than pending_payment.
 export const STATUS_INFO: Record<
   string,
-  { icon: string; title: string; body: string }
+  { icon: string; title: string; body: string; tone: StatusTone }
 > = {
   booked: {
     icon: "✅",
     title: "ชำระเงินแล้ว รอยืนยัน",
     body: "ทีมงานจะตรวจสอบและยืนยันคิวของคุณเร็วๆ นี้",
+    tone: "success",
   },
   confirmed: {
     icon: "✅",
     title: "ยืนยันการจองแล้ว",
     body: "ทีมงานได้ยืนยันคิวของคุณแล้ว",
+    tone: "success",
   },
   cancelled: {
     icon: "❌",
     title: "คิวถูกยกเลิกแล้ว",
     body: "กรุณาจองคิวใหม่หากต้องการนัดหมาย",
+    tone: "neutral",
   },
   expired: {
     icon: "⏰",
     title: "คิวหมดอายุแล้ว",
     body: "ไม่ได้ชำระภายในเวลาที่กำหนด กรุณาจองคิวใหม่",
+    tone: "warn",
   },
   completed: {
     icon: "⭐",
     title: "เสร็จสิ้น",
     body: "ขอบคุณที่ใช้บริการหมอแจว",
+    tone: "success",
   },
 };
 
@@ -70,15 +77,23 @@ export function formatThaiDeadline(iso: string | null): string {
 
 export function Wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center px-5 py-12 text-center">
-      {children}
+    <main className="checkout-page">
+      <div className="checkout-shell" style={{ maxWidth: 440 }}>
+        <div className="checkout-hero" style={{ marginBottom: 0 }}>{children}</div>
+      </div>
     </main>
   );
 }
 
-export function IconCircle({ children }: { children: React.ReactNode }) {
+export function IconCircle({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone?: "success" | "neutral" | "warn";
+}) {
   return (
-    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gray-100 text-3xl">
+    <div className="checkout-badge" data-tone={tone}>
       {children}
     </div>
   );
@@ -96,16 +111,10 @@ export function Row({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-gray-100 pb-2">
-      <dt className="shrink-0 text-sm text-gray-500">{label}</dt>
-      <dd className="ml-3 flex items-center gap-2">
-        <span
-          className={
-            strong ? "text-lg font-bold tracking-wide" : "text-sm text-right"
-          }
-        >
-          {value}
-        </span>
+    <div className="checkout-row">
+      <dt className="checkout-row-label">{label}</dt>
+      <dd className="checkout-row-value" data-strong={strong ? "true" : undefined}>
+        <span>{value}</span>
         {action}
       </dd>
     </div>

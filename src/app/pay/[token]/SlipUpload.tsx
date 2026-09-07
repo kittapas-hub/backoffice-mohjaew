@@ -72,10 +72,12 @@ export function SlipUpload({ token }: { token: string }) {
 
   if (phase === "confirmed") {
     return (
-      <div className="rounded-2xl border border-teal-100 bg-teal-50 p-5 text-center">
-        <div className="mb-2 text-3xl">✅</div>
-        <p className="font-semibold text-teal-800">ยืนยันการชำระเงินสำเร็จ</p>
-        <p className="mt-1 text-sm text-teal-700">คิวของคุณได้รับการยืนยันแล้ว</p>
+      <div className="checkout-alert" data-tone="success">
+        <div style={{ fontSize: 30 }}>✅</div>
+        <p className="checkout-alert-title" style={{ marginTop: 4 }}>
+          ยืนยันการชำระเงินสำเร็จ
+        </p>
+        <p className="checkout-alert-body">คิวของคุณได้รับการยืนยันแล้ว</p>
       </div>
     );
   }
@@ -83,9 +85,11 @@ export function SlipUpload({ token }: { token: string }) {
   const busy = phase === "uploading" || phase === "verifying";
 
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-      <h2 className="mb-1 font-bold">อัปโหลดสลิปเพื่อยืนยันอัตโนมัติ</h2>
-      <p className="mb-4 text-xs text-gray-500">
+    <div className="checkout-card">
+      <h2 className="checkout-card-title" style={{ marginBottom: 4 }}>
+        อัปโหลดสลิปเพื่อยืนยันอัตโนมัติ
+      </h2>
+      <p className="checkout-note" style={{ marginTop: 0, marginBottom: 16 }}>
         รองรับไฟล์ JPG, PNG, WebP ขนาดไม่เกิน 4 MB — ใช้รูปสลิปต้นฉบับจากแอปธนาคาร
       </p>
 
@@ -99,35 +103,34 @@ export function SlipUpload({ token }: { token: string }) {
       />
 
       {busy ? (
-        <div className="text-center">
+        <div aria-live="polite">
           {phase === "uploading" ? (
             <>
-              <div className="mb-2 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+              <div className="checkout-progress-track">
                 <div
-                  className="h-full rounded-full bg-rose-500 transition-all"
+                  className="checkout-progress-fill"
                   style={{ width: `${progress}%` }}
                 />
               </div>
-              <p className="text-sm text-gray-600">กำลังอัปโหลด… {progress}%</p>
+              <p className="checkout-progress-text">กำลังอัปโหลด… {progress}%</p>
             </>
           ) : (
-            <p className="animate-pulse text-sm font-medium text-rose-700">
-              กำลังตรวจสอบสลิปกับธนาคาร…
-            </p>
+            <p className="checkout-verifying">กำลังตรวจสอบสลิปกับธนาคาร…</p>
           )}
         </div>
       ) : (
         <>
           {phase === "error" && (
-            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            <div
+              className="checkout-alert"
+              data-tone={retryable ? "warn" : "error"}
+              style={{ marginBottom: 12, textAlign: "left" }}
+              role="alert"
+            >
               {message}
             </div>
           )}
-          <button
-            type="button"
-            onClick={onPick}
-            className="w-full rounded-xl bg-rose-600 px-5 py-3 text-sm font-semibold text-white hover:bg-rose-700"
-          >
+          <button type="button" onClick={onPick} className="checkout-btn">
             {phase === "error" && retryable ? "ลองอัปโหลดอีกครั้ง" : "เลือกรูปสลิป"}
           </button>
         </>
