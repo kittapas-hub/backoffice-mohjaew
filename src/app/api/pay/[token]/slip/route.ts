@@ -106,11 +106,13 @@ async function storeSlipEvidence(
       .from("payment-slips")
       .upload(path, image, { contentType: mimeType, upsert: false });
     if (uploadErr) {
+      await cleanupUnreferencedUpload(db, path);
       console.error("[slip] evidence upload failed", { orderId });
       await recordEvidenceFailure(db, orderId, bookingId, "upload");
       return "upload_failed";
     }
   } catch {
+    await cleanupUnreferencedUpload(db, path);
     console.error("[slip] evidence upload threw", { orderId });
     await recordEvidenceFailure(db, orderId, bookingId, "upload");
     return "upload_failed";
@@ -149,11 +151,13 @@ async function cleanupUnreferencedUpload(
   path: string,
 ): Promise<void> {
   try {
-    const { count } = await db
+    const { count, error } = await db
       .from("payment_slip_images")
       .select("id", { count: "exact", head: true })
       .eq("storage_path", path);
-    if (count && count > 0) return;
+    // An uncertain lookup must never delete evidence: the insert may have
+    // committed even if its response or this count query failed.
+    if (error || (count && count > 0)) return;
     await db.storage.from("payment-slips").remove([path]);
   } catch {
     // Best-effort only — see this file's storeSlipEvidence header and

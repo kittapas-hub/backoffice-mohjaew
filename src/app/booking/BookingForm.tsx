@@ -21,6 +21,7 @@ import {
 } from "@/lib/client-image-compression";
 
 const FACE_ACCEPT = "image/jpeg,image/png,image/webp";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type Slot = {
   id: string;
@@ -285,7 +286,15 @@ export default function BookingForm({
           setSubmitting(false);
           return;
         }
-        token = ((await upRes.json()) as { uploadToken: string }).uploadToken;
+        const uploadBody: unknown = await upRes.json();
+        const uploadCandidate =
+          uploadBody && typeof uploadBody === "object"
+            ? (uploadBody as { uploadToken?: unknown }).uploadToken
+            : null;
+        if (typeof uploadCandidate !== "string" || !UUID_RE.test(uploadCandidate)) {
+          throw new Error("upload_token_invalid");
+        }
+        token = uploadCandidate;
         setUploadToken(token);
       } catch {
         setError("อัปโหลดรูปหน้าไม่สำเร็จ กรุณาลองใหม่");

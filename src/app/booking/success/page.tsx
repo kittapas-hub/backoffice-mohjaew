@@ -78,6 +78,7 @@ export default async function BookingSuccess({
       slotLabel={booking.slotLabel}
       queueNumber={booking.queueNumber}
       holdExpiresAt={booking.holdExpiresAt}
+      initialHoldExpired={!holdLive}
       deadline={deadline}
       hasPaymentConfig={hasPaymentConfig}
       hasQR={hasQR}

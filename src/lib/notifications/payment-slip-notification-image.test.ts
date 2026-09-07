@@ -266,7 +266,8 @@ assert.match(storeFnSrc, /try\s*\{[\s\S]*?payment_slip_images["'`]?\)[\s\S]*?\.i
 assert.match(routeSrc, /recordEvidenceFailure\(/, "a failed evidence write must be durably recorded");
 assert.match(routeSrc, /payment_slip_evidence_failures/, "failures must be recorded in payment_slip_evidence_failures");
 const cleanupFnSrc = routeSrc.slice(routeSrc.indexOf("async function cleanupUnreferencedUpload"), routeSrc.indexOf("async function recordEvidenceFailure"));
-assert.match(cleanupFnSrc, /count && count > 0\) return/, "cleanup must never remove an object still referenced by an earlier attempt's row");
+assert.match(cleanupFnSrc, /const \{ count, error \}/, "cleanup must inspect evidence-lookup errors before removing an object");
+assert.match(cleanupFnSrc, /if \(error \|\| \(count && count > 0\)\) return/, "cleanup must fail closed when evidence lookup is uncertain or referenced");
 assert.match(cleanupFnSrc, /\.remove\(\[path\]\)/, "cleanup must only remove the object when nothing references it");
 
 // ===========================================================================

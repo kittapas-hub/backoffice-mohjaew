@@ -97,8 +97,18 @@ assert.match(
 );
 assert.match(
   pageSrc,
+  /รายการนี้หมดอายุแล้ว[\s\S]*?กรุณาอย่าโอนเงินหรืออัปโหลดสลิปสำหรับรายการนี้/,
+  "server-rendered closed state must explicitly prohibit payment and slip upload",
+);
+assert.match(
+  pageSrc,
   /bookingRow\?\.status !== "pending_payment"/,
   "an unpaid order must close when an admin has already moved the booking out of pending_payment",
+);
+assert.match(
+  pageSrc,
+  /order\.status === "refunded"/,
+  "a refunded payment order must never render new payment instructions",
 );
 assert.match(
   pageSrc,
@@ -111,6 +121,11 @@ assert.match(
   "customer support reference must use the booking reference, not an unsearchable order id",
 );
 assert.match(pageSrc, /const paidSubtitle/, "paid copy must depend on the booking state");
+assert.match(
+  pageSrc,
+  /isUnderReview\s*\? "รอตรวจสอบการชำระเงิน"[\s\S]*?isPaid && bookingRow\?\.status === "pending_payment"[\s\S]*?ชำระแล้ว รอทีมงานยืนยันคิว/,
+  "payment-order states must not be displayed as waiting for payment in the summary",
+);
 assert.match(
   pageSrc,
   /bookingClosedAfterPayment/,

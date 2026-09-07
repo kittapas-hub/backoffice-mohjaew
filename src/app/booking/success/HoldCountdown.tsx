@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { formatMmSs } from "./helpers";
 
 function msRemaining(expiresAt: string): number {
-  return new Date(expiresAt).getTime() - Date.now();
+  const expiry = new Date(expiresAt).getTime();
+  return Number.isFinite(expiry) ? expiry - Date.now() : 0;
 }
 
 export function HoldCountdown({

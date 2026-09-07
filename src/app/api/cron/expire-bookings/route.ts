@@ -79,7 +79,11 @@ export async function GET(req: Request) {
     } else {
       // Real storage failure — record error on our own lease row and let the
       // lease expire so the next cron run retries with a fresh token.
-      console.error("[cron] face storage delete failed, will retry", row.storage_path, storageErr);
+      console.error(
+        "[cron] face storage delete failed, will retry",
+        row.id.slice(0, 8).toUpperCase(),
+        storageErr,
+      );
       await db
         .from("booking_face_uploads")
         .update({ cleanup_last_error: String(storageErr!.message).slice(0, 500) })

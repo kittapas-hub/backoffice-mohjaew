@@ -183,8 +183,8 @@ const panelSrc = readSrc("app/booking/success/BookingStatusPanel.tsx");
 // A local holdExpired flag, driven only by props.holdExpiresAt vs Date.now().
 assert.match(
   panelSrc,
-  /new Date\(props\.holdExpiresAt!\)\.getTime\(\)\s*<=\s*Date\.now\(\)/,
-  "must compute hold expiry from props.holdExpiresAt vs the client clock",
+  /const expiry = new Date\(props\.holdExpiresAt!\)\.getTime\(\)[\s\S]*?setHoldExpired\(!Number\.isFinite\(expiry\) \|\| expiry <= Date\.now\(\)\)/,
+  "must compute hold expiry from props.holdExpiresAt and fail closed on invalid timestamps",
 );
 
 // The payment-instructions branch must be gated on holdExpired, ahead of

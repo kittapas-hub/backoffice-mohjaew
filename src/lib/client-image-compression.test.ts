@@ -29,6 +29,11 @@ assert.match(
 );
 assert.match(
   compressionSource,
+  /createImageBitmap[\s\S]*?catch \{[\s\S]*?object-URL decoder[\s\S]*?URL\.createObjectURL/,
+  "createImageBitmap option failures must fall back to the browser image decoder",
+);
+assert.match(
+  compressionSource,
   /loaded\.width <= FACE_MAX_DIMENSION[\s\S]*loaded\.height <= FACE_MAX_DIMENSION/,
   "small source files must not bypass the image dimension policy",
 );

@@ -44,15 +44,22 @@ const UUID_RE =
 
 // POST /api/bookings — central creation path for all channels.
 export async function POST(req: Request) {
-  let body: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    body = await req.json();
+    parsed = await req.json();
   } catch {
     return NextResponse.json(
       { error: "invalid_input", message: MESSAGES.invalid_input },
       { status: 400 },
     );
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return NextResponse.json(
+      { error: "invalid_input", message: MESSAGES.invalid_input },
+      { status: 400 },
+    );
+  }
+  const body = parsed as Record<string, unknown>;
 
   // Honeypot: real users never fill this hidden field; bots do.
   if (String(body.company ?? "").trim() !== "") {

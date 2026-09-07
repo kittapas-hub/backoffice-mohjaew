@@ -12,9 +12,10 @@ export function LineCta({
   const [expired, setExpired] = useState(false);
 
   useEffect(() => {
-    if (!expiresAt) return;
-    const check = () =>
-      setExpired(new Date(expiresAt).getTime() - Date.now() <= 0);
+    const check = () => {
+      const expiry = expiresAt ? new Date(expiresAt).getTime() : NaN;
+      setExpired(!Number.isFinite(expiry) || expiry <= Date.now());
+    };
     check();
     // ponytail: 5s interval — no need for 1s tick here, CTA state change is not time-critical
     const id = setInterval(check, 5000);

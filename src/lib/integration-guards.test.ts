@@ -319,6 +319,8 @@ assert.match(slotSeedingSrc, /SESSION_CUTOVER_DATE/, "cutover date must be docum
 
 // --- 5. POST /api/bookings guards -------------------------------------------
 const bookingsRoute = read("app/api/bookings/route.ts");
+assert.match(bookingsRoute, /typeof parsed !== "object" \|\| Array\.isArray\(parsed\)/,
+  "bookings route must reject null, primitive, and array JSON bodies before field access");
 assert.match(bookingsRoute, /idempotency-key/i, "must read Idempotency-Key");
 assert.match(bookingsRoute, /body\.company/, "must check the honeypot field");
 assert.match(bookingsRoute, /BOOKING_RATE_LIMIT_SECRET/, "must require rate-limit secret");
@@ -347,6 +349,7 @@ for (const f of clientFiles) {
 
 // success page reads only `token` from searchParams (not individual fields).
 const successPage = read("app/booking/success/page.tsx");
+const nextConfig = read("../next.config.ts");
 assert.match(
   successPage,
   /token.*searchParams|searchParams.*token/,
@@ -392,6 +395,10 @@ assert.doesNotMatch(
   /booking\/success[^`'"]*(?:ref=|&q=|&date=|&slot=|&exp=)/,
   "BookingForm must not put individual booking fields in the success URL",
 );
+assert.match(nextConfig, /source: "\/booking\/success"[\s\S]*?Referrer-Policy[\s\S]*?no-referrer/,
+  "success capability URLs must not be forwarded as referrers");
+assert.match(nextConfig, /source: "\/pay\/:path\*"[\s\S]*?Referrer-Policy[\s\S]*?no-referrer/,
+  "payment capability URLs must not be forwarded as referrers");
 
 // --- 8. Face upload + LINE image notify (upload-token flow) ------------------
 
@@ -421,6 +428,11 @@ assert.match(bookingsRoute, /face_token_invalid/, "bookings route must map face_
 assert.match(coreSrc, /p_face_upload_token/, "booking-core must pass p_face_upload_token to RPC");
 assert.match(coreSrc, /face_token_expired/, "booking-core KNOWN_ERRORS must include face_token_expired");
 assert.match(coreSrc, /face_token_invalid/, "booking-core KNOWN_ERRORS must include face_token_invalid");
+assert.match(
+  coreSrc,
+  /if \(!opts\.faceUploadToken \|\| !UUID_RE\.test\(opts\.faceUploadToken\)\)/,
+  "the shared public booking flow must require a valid claimed face-upload token",
+);
 // linkFaceToBooking was removed in P0 hardening (logic moved into RPC + inline).
 assert.doesNotMatch(coreSrc, /linkFaceToBooking/, "booking-core must not export linkFaceToBooking");
 

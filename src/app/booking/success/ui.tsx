@@ -70,8 +70,10 @@ export function formatThaiDate(iso: string | null): string {
 export function formatThaiDeadline(iso: string | null): string {
   if (!iso) return "";
   try {
+    const date = new Date(iso);
+    if (!Number.isFinite(date.getTime())) return "";
     return (
-      new Date(iso).toLocaleString("th-TH", {
+      date.toLocaleString("th-TH", {
         day: "numeric",
         month: "short",
         hour: "2-digit",

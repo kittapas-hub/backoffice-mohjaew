@@ -24,6 +24,8 @@ export function BookingStatusPanel(props: {
   slotLabel: string | null;
   queueNumber: number | null;
   holdExpiresAt: string | null;
+  /** Server-rendered gate prevents expired payment copy before hydration. */
+  initialHoldExpired: boolean;
   deadline: string;
   hasPaymentConfig: boolean;
   hasQR: boolean;
@@ -45,11 +47,16 @@ export function BookingStatusPanel(props: {
   // The moment a poll observes a real status change, the component leaves
   // this branch entirely (see the !shouldPollStatus(status) render below),
   // so a locally-computed expiry can never mask or fight a server transition.
-  const [holdExpired, setHoldExpired] = useState(false);
+  const [holdExpired, setHoldExpired] = useState(props.initialHoldExpired);
   useEffect(() => {
-    if (!props.holdExpiresAt) return;
-    const check = () =>
-      setHoldExpired(new Date(props.holdExpiresAt!).getTime() <= Date.now());
+    if (!props.holdExpiresAt) {
+      setHoldExpired(true);
+      return;
+    }
+    const check = () => {
+      const expiry = new Date(props.holdExpiresAt!).getTime();
+      setHoldExpired(!Number.isFinite(expiry) || expiry <= Date.now());
+    };
     check();
     const id = setInterval(check, 1000);
     return () => clearInterval(id);
@@ -68,6 +75,7 @@ export function BookingStatusPanel(props: {
       try {
         const res = await fetch(
           `/api/bookings/status?token=${encodeURIComponent(props.token)}`,
+          { cache: "no-store" },
         );
         if (!res.ok) return;
         const data = (await res.json()) as Partial<StatusResponse>;
@@ -129,6 +137,79 @@ export function BookingStatusPanel(props: {
         <h1 className="checkout-title">ยังตรวจสอบสถานะการชำระเงินไม่ได้</h1>
         <p className="checkout-subtitle">
           กรุณาอย่าโอนเงินหรืออัปโหลดสลิปซ้ำในขณะนี้ แล้วลองเปิดหน้านี้ใหม่หรือติดต่อทีมงาน
+        </p>
+        <div className="checkout-card" style={{ marginTop: 20, textAlign: "left" }}>
+          <dl className="checkout-rows">
+            <Row label="เลขอ้างอิง" value={props.reference} strong />
+            <Row label="วันที่" value={formatThaiDate(props.bookingDate)} />
+            <Row label="รอบเซสชัน" value={props.slotLabel ?? "-"} />
+          </dl>
+        </div>
+        {props.lineHref && (
+          <a
+            href={props.lineHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="checkout-link"
+            style={{ marginTop: 16 }}
+          >
+            ติดต่อทีมงานทาง LINE
+          </a>
+        )}
+      </Wrapper>
+    );
+  }
+
+  // Payment order status is authoritative for money received. The booking
+  // and payment queries are separate reads, so a brief commit-time snapshot
+  // can show a paid order beside a still-pending booking; never render pay or
+  // re-upload actions in that state.
+  if (paymentStatus === "paid") {
+    const bookingClosed = status === "cancelled" || status === "expired";
+    const bookingConfirmed = status === "confirmed" || status === "completed";
+    return (
+      <Wrapper>
+        <IconCircle tone="success">✅</IconCircle>
+        <h1 className="checkout-title">ชำระเงินแล้ว</h1>
+        <p className="checkout-subtitle">
+          {bookingClosed
+            ? "ระบบได้รับการชำระเงินแล้ว แต่รายการจองสิ้นสุดแล้ว กรุณาติดต่อทีมงาน"
+            : bookingConfirmed
+              ? "คิวของคุณได้รับการยืนยันแล้ว"
+              : "ระบบได้รับการชำระเงินแล้ว ทีมงานกำลังตรวจสอบและยืนยันคิวของคุณ"}
+        </p>
+        <div className="checkout-card" style={{ marginTop: 20, textAlign: "left" }}>
+          <dl className="checkout-rows">
+            <Row label="เลขอ้างอิง" value={props.reference} strong />
+            <Row label="วันที่" value={formatThaiDate(props.bookingDate)} />
+            <Row label="รอบเซสชัน" value={props.slotLabel ?? "-"} />
+          </dl>
+        </div>
+        {bookingClosed && props.lineHref && (
+          <a
+            href={props.lineHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="checkout-link"
+            style={{ marginTop: 16 }}
+          >
+            ติดต่อทีมงานทาง LINE
+          </a>
+        )}
+      </Wrapper>
+    );
+  }
+
+  // A closed payment order must never fall through to the pending-payment
+  // instructions, even if the booking read is briefly still pending or the
+  // order came from a legacy/future provider path.
+  if (paymentStatus === "expired" || paymentStatus === "failed" || paymentStatus === "refunded") {
+    return (
+      <Wrapper>
+        <IconCircle tone="neutral">⏰</IconCircle>
+        <h1 className="checkout-title">รายการชำระเงินปิดแล้ว</h1>
+        <p className="checkout-subtitle">
+          กรุณาอย่าโอนเงินหรืออัปโหลดสลิปซ้ำสำหรับรายการนี้ หากต้องการความช่วยเหลือกรุณาติดต่อทีมงาน
         </p>
         <div className="checkout-card" style={{ marginTop: 20, textAlign: "left" }}>
           <dl className="checkout-rows">
@@ -292,7 +373,9 @@ export function BookingStatusPanel(props: {
                   </div>
 
                   <p className="checkout-note checkout-note-center" style={{ marginTop: 14 }}>
-                    คิวของคุณจะยืนยันก็ต่อเมื่อทีมงานตรวจสอบการชำระเงินแล้วเท่านั้น
+                    {props.slipOrderUrl
+                      ? "ส่งผ่านปุ่มตรวจสอบอัตโนมัติเพื่อให้ระบบตรวจสอบและยืนยันคิวเมื่อข้อมูลถูกต้อง หากส่งสลิปทาง LINE ทีมงานจะตรวจสอบให้"
+                      : "คิวของคุณจะยืนยันก็ต่อเมื่อทีมงานตรวจสอบการชำระเงินแล้วเท่านั้น"}
                   </p>
                 </>
               ) : (
