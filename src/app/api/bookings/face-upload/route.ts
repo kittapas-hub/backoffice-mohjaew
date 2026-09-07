@@ -3,12 +3,13 @@ import crypto from "node:crypto";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { recordRateHit } from "@/lib/booking-core";
 import { clientIp } from "@/lib/client-ip";
+import { sniffImage } from "@/lib/image-meta";
+import { faceFileFitsBeforeBuffering, validateFaceUploadContentLength } from "@/lib/face-upload-guard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 const EXT: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -19,6 +20,16 @@ const RATE_LIMIT = 5;
 const RATE_WINDOW_SECONDS = 15 * 60;
 
 export async function POST(req: NextRequest) {
+  // Reject malformed/oversized requests before multipart parsing allocates memory.
+  const lengthDecision = validateFaceUploadContentLength(req.headers.get("content-length"));
+  if (!lengthDecision.ok) {
+    const status = lengthDecision.reason === "too_large" ? 413 : 400;
+    return NextResponse.json(
+      { error: lengthDecision.reason === "too_large" ? "too_large" : "invalid_request" },
+      { status },
+    );
+  }
+
   // 1. Parse multipart form.
   let form: FormData;
   try {
@@ -96,24 +107,34 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  if (file.size > MAX_BYTES) {
+  if (!faceFileFitsBeforeBuffering(file.size)) {
     return NextResponse.json(
-      { error: "too_large", message: "รูปต้องมีขนาดไม่เกิน 5 MB" },
+      { error: "too_large", message: "รูปต้องมีขนาดไม่เกิน 4 MB" },
       { status: 400 },
     );
   }
 
-  // 7. Generate uploadToken (= DB primary key) and server-controlled path.
-  //    Client never sees the storage path — only the opaque uploadToken UUID.
-  const uploadToken = crypto.randomUUID();
-  const storagePath = `faces/${uploadToken}.${EXT[file.type]}`;
+  // 7. Sniff the real image type before trusting client metadata.
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const meta = sniffImage(buffer);
+  if (!meta || !ALLOWED_TYPES.has(meta.type)) {
+    return NextResponse.json(
+      { error: "invalid_type", message: "รองรับเฉพาะ JPG, PNG, WebP" },
+      { status: 400 },
+    );
+  }
 
-  // 8. Insert intent row first; storage upload is the second step.
+  // 8. Generate uploadToken (= DB primary key) and server-controlled path.
+  //    Client never sees the storage path - only the opaque uploadToken UUID.
+  const uploadToken = crypto.randomUUID();
+  const storagePath = `faces/${uploadToken}.${EXT[meta.type]}`;
+
+  // 9. Insert intent row first; storage upload is the second step.
   const { error: insertErr } = await db.from("booking_face_uploads").insert({
     id: uploadToken,
     idempotency_key: idempotencyKey,
     storage_path: storagePath,
-    mime_type: file.type,
+    mime_type: meta.type,
     size_bytes: file.size,
     ip_hash: ipHmac, // HMAC, not raw IP
   });
@@ -134,11 +155,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "server_error" }, { status: 500 });
   }
 
-  // 9. Upload file to the private storage bucket.
-  const buffer = Buffer.from(await file.arrayBuffer());
+  // 10. Upload file to the private storage bucket.
   const { error: storageErr } = await db.storage
     .from("booking-faces")
-    .upload(storagePath, buffer, { contentType: file.type, upsert: false });
+    .upload(storagePath, buffer, { contentType: meta.type, upsert: false });
 
   if (storageErr) {
     // Rollback the intent row so the idempotency key slot is freed.

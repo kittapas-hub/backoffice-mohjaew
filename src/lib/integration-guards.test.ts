@@ -398,7 +398,7 @@ assert.doesNotMatch(
 // face-upload returns only { uploadToken } — never storagePath or a signed URL.
 const faceUpload = read("app/api/bookings/face-upload/route.ts");
 assert.match(faceUpload, /ALLOWED_TYPES/, "face-upload must define allowed MIME types");
-assert.match(faceUpload, /MAX_BYTES/, "face-upload must enforce max file size");
+assert.match(faceUpload, /faceFileFitsBeforeBuffering\(file\.size\)/, "face-upload must enforce max file size through the shared guard");
 assert.match(faceUpload, /supabaseAdmin/, "face-upload must use supabaseAdmin (service role)");
 assert.match(faceUpload, /uploadToken/, "face-upload must return uploadToken");
 assert.doesNotMatch(faceUpload, /createSignedUrl/, "face-upload must not create signed URLs");

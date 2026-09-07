@@ -206,14 +206,6 @@ export function BookingStatusPanel(props: {
             {props.slipOrderUrl && (
               <SlipVerificationLink orderUrl={props.slipOrderUrl} />
             )}
-            {false && (
-              <Link
-                href="#"
-                className="mb-3 block rounded-xl bg-rose-600 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-rose-700"
-              >
-                อัปโหลดสลิป — ยืนยันคิวอัตโนมัติ
-              </Link>
-            )}
 
             {props.lineHref && (
               <LineCta href={props.lineHref} expiresAt={props.holdExpiresAt} />

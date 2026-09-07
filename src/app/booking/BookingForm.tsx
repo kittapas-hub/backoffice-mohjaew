@@ -2,9 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  compressFaceImage,
+  FACE_SOURCE_MAX_BYTES,
+  FACE_UPLOAD_MAX_BYTES,
+} from "@/lib/client-image-compression";
 
 const FACE_ACCEPT = "image/jpeg,image/png,image/webp";
-const FACE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 
 type Slot = {
   id: string;
@@ -41,6 +45,8 @@ export default function BookingForm({
   const [company, setCompany] = useState("");
   const [faceFile, setFaceFile] = useState<File | null>(null);
   const [facePreview, setFacePreview] = useState<string | null>(null);
+  const [faceOriginalBytes, setFaceOriginalBytes] = useState<number | null>(null);
+  const [faceProcessing, setFaceProcessing] = useState(false);
   // Opaque upload token returned by the face-upload endpoint (not a storage path).
   // Stored in state so double-clicks and network retries reuse it without re-uploading.
   const [uploadToken, setUploadToken] = useState<string | null>(null);
@@ -67,22 +73,51 @@ export default function BookingForm({
     };
   }, [date]);
 
-  function onFaceChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
+  async function onFaceChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const input = e.currentTarget;
+    const file = input.files?.[0] ?? null;
     if (!file) return;
-    if (file.size > FACE_MAX_BYTES) {
-      setError("รูปต้องมีขนาดไม่เกิน 5 MB");
-      e.target.value = "";
+    if (file.size > FACE_SOURCE_MAX_BYTES) {
+      setError("รูปต้นฉบับต้องมีขนาดไม่เกิน 20 MB");
+      input.value = "";
       return;
     }
-    // New photo invalidates the previous upload token and idempotency key
-    // so the next submit does a fresh upload tied to a new key.
-    idemKey.current = "";
-    setUploadToken(null);
-    setFaceFile(file);
-    setFacePreview(URL.createObjectURL(file));
+
+    setFaceProcessing(true);
     setError(null);
+    try {
+      const prepared = await compressFaceImage(file);
+      if (prepared.size > FACE_UPLOAD_MAX_BYTES) {
+        throw new Error("compressed_too_large");
+      }
+
+      // New photo invalidates the previous upload token and idempotency key
+      // so the next submit does a fresh upload tied to a new key.
+      idemKey.current = "";
+      setUploadToken(null);
+      setFaceOriginalBytes(file.size);
+      setFaceFile(prepared);
+      setFacePreview(URL.createObjectURL(prepared));
+    } catch (err) {
+      input.value = "";
+      setFaceFile(null);
+      setFacePreview(null);
+      setFaceOriginalBytes(null);
+      setError(
+        err instanceof Error && err.message === "unsupported_type"
+          ? "รองรับเฉพาะ JPG, PNG และ WebP"
+          : "ปรับขนาดรูปไม่สำเร็จ กรุณาเลือกรูปอื่น",
+      );
+    } finally {
+      setFaceProcessing(false);
+    }
   }
+
+  useEffect(() => {
+    return () => {
+      if (facePreview) URL.revokeObjectURL(facePreview);
+    };
+  }, [facePreview]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -308,6 +343,7 @@ export default function BookingForm({
             type="file"
             accept={FACE_ACCEPT}
             onChange={onFaceChange}
+            disabled={faceProcessing}
             className="booking-hidden-field"
           />
           <div
@@ -329,13 +365,18 @@ export default function BookingForm({
                 style={{ maxHeight: 160, maxWidth: "100%", borderRadius: 10, margin: "0 auto" }}
               />
             ) : (
-              "แตะหรือคลิกเพื่อเลือกรูป (JPG, PNG, WebP · สูงสุด 5 MB)"
+              faceProcessing
+                ? "กำลังปรับขนาดรูป..."
+                : "แตะหรือคลิกเพื่อเลือกรูป · ระบบบีบอัตโนมัติ (ต้นฉบับสูงสุด 20 MB)"
             )}
           </div>
         </label>
         {faceFile && (
           <p style={{ margin: "6px 0 0", fontSize: 12, color: "#6b7280" }}>
             {faceFile.name} ({(faceFile.size / 1024).toFixed(0)} KB)
+            {faceOriginalBytes && faceOriginalBytes > faceFile.size + 64 * 1024
+              ? ` · ลดจาก ${(faceOriginalBytes / 1024 / 1024).toFixed(1)} MB อัตโนมัติ`
+              : ""}
           </p>
         )}
       </section>
@@ -345,10 +386,10 @@ export default function BookingForm({
 
         <button
           type="submit"
-          disabled={submitting || !slotId || !faceFile}
+          disabled={submitting || faceProcessing || !slotId || !faceFile}
           className="booking-submit"
         >
-          {submitting ? "กำลังจอง..." : "ยืนยันการจองคิว"}
+          {faceProcessing ? "กำลังปรับรูป..." : submitting ? "กำลังจอง..." : "ยืนยันการจองคิว"}
         </button>
         <p className="booking-note">
           เมื่อจองแล้วระบบจะถือคิวให้ {holdMinutes} นาที เพื่อรอการชำระเงิน
