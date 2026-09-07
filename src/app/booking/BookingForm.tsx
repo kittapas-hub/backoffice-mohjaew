@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatThaiDate } from "./success/ui";
 import {
+  BOOKING_PHONE_MAX_LENGTH,
   BOOKING_WIZARD_STEPS,
   canContinueWizard,
   canSubmitBooking,
@@ -11,6 +12,7 @@ import {
   invalidateSlotSelection,
   nextWizardStep,
   previousWizardStep,
+  sanitizeBookingPhone,
   type BookingWizardState,
   type WizardStep,
 } from "@/lib/booking-wizard";
@@ -480,10 +482,12 @@ export default function BookingForm({
                   required
                   name="phone"
                   type="tel"
-                  inputMode="tel"
+                  inputMode="numeric"
                   autoComplete="tel"
+                  pattern="[0-9]{9,15}"
+                  maxLength={BOOKING_PHONE_MAX_LENGTH}
                   value={form.phone}
-                  onChange={(e) => updateForm("phone", e.target.value)}
+                  onChange={(e) => updateForm("phone", sanitizeBookingPhone(e.target.value))}
                   className="booking-input"
                 />
               </label>

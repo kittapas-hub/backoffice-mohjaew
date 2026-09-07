@@ -162,7 +162,7 @@ const reviewBlock = panelSrc.slice(
   panelSrc.indexOf("// ── Non-pending_payment status"),
 );
 assert.match(reviewBlock, /ไม่ต้องโอนเงินหรืออัปโหลดสลิปซ้ำ/);
-assert.doesNotMatch(reviewBlock, /SlipVerificationLink|qrSrc|accountNumber/);
+assert.doesNotMatch(reviewBlock, /SlipUpload|qrSrc|accountNumber/);
 
 assert.match(
   bookingCoreSrc,
@@ -174,7 +174,7 @@ const unknownBlock = panelSrc.slice(
   panelSrc.indexOf("// ── Non-pending_payment status"),
 );
 assert.match(unknownBlock, /อย่าโอนเงินหรืออัปโหลดสลิปซ้ำ/);
-assert.doesNotMatch(unknownBlock, /SlipVerificationLink|qrSrc|accountNumber/);
+assert.doesNotMatch(unknownBlock, /SlipUpload|qrSrc|accountNumber/);
 
 const paidBlock = panelSrc.slice(
   panelSrc.indexOf('paymentStatus === "paid"'),
@@ -183,7 +183,7 @@ const paidBlock = panelSrc.slice(
 assert.match(paidBlock, /ชำระเงินแล้ว/);
 assert.doesNotMatch(
   paidBlock,
-  /SlipVerificationLink|qrSrc|accountNumber|hasPaymentConfig/,
+  /SlipUpload|qrSrc|accountNumber|hasPaymentConfig/,
   "a paid payment order must never render transfer or slip-upload actions",
 );
 const closedPaymentBlock = panelSrc.slice(
@@ -193,8 +193,17 @@ const closedPaymentBlock = panelSrc.slice(
 assert.match(closedPaymentBlock, /กรุณาอย่าโอนเงินหรืออัปโหลดสลิปซ้ำ/);
 assert.doesNotMatch(
   closedPaymentBlock,
-  /SlipVerificationLink|qrSrc|accountNumber|hasPaymentConfig/,
+  /SlipUpload|qrSrc|accountNumber|hasPaymentConfig/,
   "a closed payment order must never render transfer or slip-upload actions",
+);
+const nonPendingBlock = panelSrc.slice(
+  panelSrc.indexOf("if (!shouldPollStatus(status))"),
+  panelSrc.indexOf("// ── pending_payment"),
+);
+assert.doesNotMatch(
+  nonPendingBlock,
+  /SlipUpload|qrSrc|accountNumber|hasPaymentConfig/,
+  "confirmed, expired, cancelled, completed, and unknown booking states must never expose payment actions",
 );
 assert.match(
   successPageSrc,
@@ -246,5 +255,16 @@ assert.match(
   /props\.slipOrderUrl[\s\S]*?ระบบตรวจสอบและยืนยันคิวเมื่อข้อมูลถูกต้อง[\s\S]*?คิวของคุณจะยืนยันก็ต่อเมื่อทีมงานตรวจสอบการชำระเงินแล้วเท่านั้น/,
   "pending_payment view must distinguish automatic slip verification from the LINE/manual path",
 );
+assert.match(
+  panelSrc,
+  /import \{ SlipUpload \} from "@\/app\/pay\/\[token\]\/SlipUpload"/,
+  "booking success must reuse the direct-checkout slip uploader",
+);
+assert.match(
+  panelSrc,
+  /props\.slipOrderUrl && \([\s\S]*?<SlipUpload orderUrl=\{props\.slipOrderUrl\} \/>[\s\S]*?props\.lineHref/,
+  "automatic inline upload must render before the secondary LINE action",
+);
+assert.doesNotMatch(panelSrc, /SlipVerificationLink/, "booking success must not use the redirect-only uploader");
 
 console.log("success-page helpers: all checks passed ✓");

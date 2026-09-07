@@ -18,6 +18,13 @@ export type BookingWizardState = {
   faceReady: boolean;
 };
 
+export const BOOKING_PHONE_MAX_LENGTH = 15;
+
+/** Keep the controlled booking-phone state ASCII-digit-only. */
+export function sanitizeBookingPhone(value: string): string {
+  return value.replace(/\D/g, "").slice(0, BOOKING_PHONE_MAX_LENGTH);
+}
+
 export type WizardStepStatus = "current" | "complete" | "upcoming";
 
 function hasDate(date: string): boolean {

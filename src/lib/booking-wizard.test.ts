@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import {
+  BOOKING_PHONE_MAX_LENGTH,
   BOOKING_WIZARD_STEPS,
   canContinueWizard,
   canSubmitBooking,
@@ -7,8 +8,19 @@ import {
   invalidateSlotSelection,
   nextWizardStep,
   previousWizardStep,
+  sanitizeBookingPhone,
   type BookingWizardState,
 } from "./booking-wizard.ts";
+
+assert.equal(BOOKING_PHONE_MAX_LENGTH, 15);
+assert.equal(sanitizeBookingPhone("081-234-5678 ext. 9"), "08123456789");
+assert.equal(sanitizeBookingPhone("phone: (081) 234-5678"), "0812345678");
+assert.equal(sanitizeBookingPhone("0abc!@#$%^&*()"), "0", "leading zero must be preserved");
+assert.equal(
+  sanitizeBookingPhone("01234567890123456789"),
+  "012345678901234",
+  "controlled phone state must never exceed the server's 15-digit limit",
+);
 
 assert.deepEqual(
   BOOKING_WIZARD_STEPS.map((step) => step.label),

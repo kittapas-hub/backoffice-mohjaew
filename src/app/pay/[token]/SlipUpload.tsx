@@ -1,23 +1,28 @@
 "use client";
 
-// Slip upload widget for /pay/[token]. Uses XMLHttpRequest (not fetch) so a
-// real upload progress bar is possible. Shows: idle → uploading (progress) →
-// verifying → confirmed / error. Retry stays available for temporary
-// failures; permanent mismatches show the server's guidance message.
+// Shared slip upload widget for direct checkout and booking-success entry.
+// Uses XMLHttpRequest (not fetch) so a real upload progress bar is possible.
+// Booking-success mode resolves the checkout token only after a valid file is
+// selected, then uploads that same File object through the hardened route.
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckoutIcon } from "@/app/booking/success/ui";
 
-type Phase = "idle" | "uploading" | "verifying" | "confirmed" | "error" | "terminal";
+type Phase = "idle" | "preparing" | "uploading" | "verifying" | "confirmed" | "error" | "terminal";
 
 type ServerFail = { error?: string; message?: string; retryable?: boolean };
+type SlipUploadProps =
+  | { token: string; orderUrl?: never }
+  | { token?: never; orderUrl: string };
 
 const MAX_BYTES = 4 * 1024 * 1024;
+const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-export function SlipUpload({ token }: { token: string }) {
+export function SlipUpload(props: SlipUploadProps) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
+  const checkoutTokenRef = useRef<string | null>(props.token ?? null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
@@ -31,17 +36,29 @@ export function SlipUpload({ token }: { token: string }) {
     inputRef.current?.click();
   }
 
-  function onFile(file: File | null) {
-    if (!file) return;
-    if (file.size > MAX_BYTES) {
-      setPhase("error");
-      setRetryable(true);
-      setMessage("รูปต้องมีขนาดไม่เกิน 4 MB");
-      return;
+  async function resolveCheckoutToken(): Promise<string> {
+    if (checkoutTokenRef.current) return checkoutTokenRef.current;
+    if (!props.orderUrl) throw new Error("order_unavailable");
+
+    const res = await fetch(props.orderUrl, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    const parsed: unknown = await res.json();
+    const checkoutToken =
+      parsed && typeof parsed === "object"
+        ? (parsed as { checkoutToken?: unknown }).checkoutToken
+        : null;
+    if (!res.ok || typeof checkoutToken !== "string" || checkoutToken.length === 0) {
+      throw new Error("order_unavailable");
     }
+    checkoutTokenRef.current = checkoutToken;
+    return checkoutToken;
+  }
+
+  function upload(file: File, token: string) {
     setPhase("uploading");
     setProgress(0);
-    setMessage("");
 
     const form = new FormData();
     form.append("file", file);
@@ -77,7 +94,7 @@ export function SlipUpload({ token }: { token: string }) {
       const body = (xhr.response ?? {}) as { status?: string } & ServerFail;
       if (xhr.status === 200 && body.status === "confirmed") {
         setPhase("confirmed");
-        // Refresh the server component so the page shows the paid state.
+        // Refresh the server component so either entry page shows paid state.
         setTimeout(() => router.refresh(), 1200);
         return;
       }
@@ -96,6 +113,33 @@ export function SlipUpload({ token }: { token: string }) {
       setMessage(body.message ?? "เกิดข้อผิดพลาด กรุณาลองใหม่");
     };
     xhr.send(form);
+  }
+
+  async function onFile(file: File | null) {
+    if (!file) return;
+    if (file.size > MAX_BYTES) {
+      setPhase("error");
+      setRetryable(true);
+      setMessage("รูปต้องมีขนาดไม่เกิน 4 MB");
+      return;
+    }
+    if (!ALLOWED_TYPES.has(file.type)) {
+      setPhase("error");
+      setRetryable(true);
+      setMessage("รองรับเฉพาะ JPG, PNG และ WebP");
+      return;
+    }
+
+    setMessage("");
+    setPhase(checkoutTokenRef.current ? "uploading" : "preparing");
+    try {
+      const checkoutToken = await resolveCheckoutToken();
+      upload(file, checkoutToken);
+    } catch {
+      setPhase("error");
+      setRetryable(true);
+      setMessage("ยังเริ่มการตรวจสอบสลิปไม่ได้ กรุณาลองใหม่หรือติดต่อทีมงาน");
+    }
   }
 
   if (phase === "confirmed") {
@@ -119,7 +163,7 @@ export function SlipUpload({ token }: { token: string }) {
     );
   }
 
-  const busy = phase === "uploading" || phase === "verifying";
+  const busy = phase === "preparing" || phase === "uploading" || phase === "verifying";
 
   return (
     <div className="checkout-card">
@@ -146,7 +190,9 @@ export function SlipUpload({ token }: { token: string }) {
 
       {busy ? (
         <div aria-live="polite">
-          {phase === "uploading" ? (
+          {phase === "preparing" ? (
+            <p className="checkout-verifying">กำลังเตรียมรายการตรวจสอบสลิป…</p>
+          ) : phase === "uploading" ? (
             <>
               <div className="checkout-progress-track">
                 <div

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { CopyButton } from "./CopyButton";
 import { HoldCountdown } from "./HoldCountdown";
 import { LineCta } from "./LineCta";
-import { SlipVerificationLink } from "./SlipVerificationLink";
+import { SlipUpload } from "@/app/pay/[token]/SlipUpload";
 import { STATUS_POLL_INTERVAL_MS, shouldPollStatus } from "./helpers";
 import { CheckoutIcon, STATUS_INFO, formatThaiDate, Wrapper, IconCircle, Row } from "./ui";
 
@@ -365,7 +365,7 @@ export function BookingStatusPanel(props: {
 
                   <div className="checkout-stack">
                     {props.slipOrderUrl && (
-                      <SlipVerificationLink orderUrl={props.slipOrderUrl} />
+                      <SlipUpload orderUrl={props.slipOrderUrl} />
                     )}
                     {props.lineHref && (
                       <LineCta href={props.lineHref} expiresAt={props.holdExpiresAt} />
