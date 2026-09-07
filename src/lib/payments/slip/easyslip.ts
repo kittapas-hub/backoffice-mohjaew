@@ -97,11 +97,17 @@ export function normalizeEasySlipBody(body: unknown): SlipVerifyResult {
   const senderBankObj = obj(sender.bank);
   const senderAccount = obj(sender.account);
   const senderNameObj = obj(senderAccount.name);
-  const receiverIdentifier = str(obj(receiverAccount.bank).account) ??
-    str(obj(receiverAccount.proxy).account);
+  const countryCode = str(rawSlip.countryCode);
 
+  // Only the money-critical and match-critical facts are required. Optional
+  // provider fields — payload, countryCode, fee, ref1/ref2/ref3, and the
+  // sender/receiver display block — are legitimately absent on many real
+  // EasySlip v2 success responses (e.g. bank-app PromptPay transfers) and
+  // must NOT be treated as malformed. Absent receiver identity simply yields
+  // null evidence: it can never auto-confirm, because receiverMatches (in
+  // policy.ts) still requires providerMatchedAccount === true AND a masked
+  // account/name match, otherwise the payment routes to manual review.
   if (
-    !str(rawSlip.payload) ||
     !txRef ||
     !transferTimestamp ||
     amount === null ||
@@ -109,17 +115,10 @@ export function normalizeEasySlipBody(body: unknown): SlipVerifyResult {
     amountInSlip !== amount ||
     thbToSatang(localAmount.amount) !== amount ||
     !currency ||
-    str(rawSlip.countryCode) !== "TH" ||
-    typeof rawSlip.fee !== "number" ||
-    !Number.isFinite(rawSlip.fee) ||
-    typeof rawSlip.ref1 !== "string" ||
-    typeof rawSlip.ref2 !== "string" ||
-    typeof rawSlip.ref3 !== "string" ||
-    !str(senderBankObj.short) ||
-    (!str(senderNameObj.th) && !str(senderNameObj.en)) ||
-    !str(receiverBank.short) ||
-    !receiverIdentifier ||
-    (!str(receiverName.th) && !str(receiverName.en)) ||
+    // Reject only an explicitly foreign slip; a missing countryCode is common
+    // on legitimate domestic slips and stays permitted (currency + amount are
+    // the authoritative money guarantees).
+    (countryCode !== null && countryCode !== "TH") ||
     !matchedValid
   ) {
     return { ok: false, reason: "malformed_response", retryable: false };

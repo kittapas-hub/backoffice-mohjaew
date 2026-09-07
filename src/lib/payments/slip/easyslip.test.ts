@@ -79,6 +79,68 @@ unmatched.data.matchedAccount = null as unknown as typeof SUCCESS.data.matchedAc
 const unmatchedResult = normalizeEasySlipBody(unmatched);
 assert.ok(unmatchedResult.ok && unmatchedResult.slip.receiver.providerMatchedAccount === false);
 
+// Real-world minimal EasySlip v2 success (the UAT regression): a bank-app
+// PromptPay transfer that omits every optional field — payload, countryCode,
+// fee, ref1/ref2/ref3, and the sender/receiver display block — but carries the
+// money- and match-critical facts. This shape previously became
+// malformed_response and must now parse.
+const MINIMAL = {
+  success: true,
+  message: "Bank slip verified successfully",
+  data: {
+    isDuplicate: false,
+    matchedAccount: {
+      bank: { code: "004" },
+      nameTh: "ร้านหมอแจ๋ว",
+      bankNumber: "123-4-56789-0",
+    },
+    amountInSlip: 1,
+    rawSlip: {
+      transRef: "TX-MIN-1",
+      date: "2026-09-07T10:00:00Z",
+      amount: { amount: 1, local: { amount: 1, currency: "THB" } },
+      receiver: { account: { bank: { account: "xxx-x-x1234-x" } } },
+    },
+  },
+};
+const minimal = normalizeEasySlipBody(MINIMAL);
+assert.ok(minimal.ok, "minimal EasySlip v2 success must parse (UAT regression)");
+if (minimal.ok) {
+  assert.equal(minimal.slip.amountSatang, 100);
+  assert.equal(minimal.slip.currency, "THB");
+  assert.equal(minimal.slip.providerTransactionReference, "TX-MIN-1");
+  assert.equal(minimal.slip.transferTimestamp?.toISOString(), "2026-09-07T10:00:00.000Z");
+  assert.equal(minimal.slip.receiver.providerMatchedAccount, true);
+  assert.equal(minimal.slip.receiver.accountMasked, "xxx-x-x1234-x");
+  assert.equal(minimal.slip.senderDisplay, null); // absent sender is not malformed
+  assert.equal(minimal.slip.duplicateSignal, false);
+}
+
+// Fail-closed guards preserved on the minimal shape: an explicitly foreign
+// slip, a zero/absent amount, and a mismatched local amount all stay malformed.
+const foreign = structuredClone(MINIMAL);
+(foreign.data.rawSlip as { countryCode?: string }).countryCode = "US";
+assert.deepEqual(normalizeEasySlipBody(foreign), {
+  ok: false, reason: "malformed_response", retryable: false,
+});
+const zeroAmount = structuredClone(MINIMAL);
+zeroAmount.data.amountInSlip = 0;
+zeroAmount.data.rawSlip.amount = { amount: 0, local: { amount: 0, currency: "THB" } };
+assert.deepEqual(normalizeEasySlipBody(zeroAmount), {
+  ok: false, reason: "malformed_response", retryable: false,
+});
+const localMismatch = structuredClone(MINIMAL);
+localMismatch.data.rawSlip.amount.local.amount = 2;
+assert.deepEqual(normalizeEasySlipBody(localMismatch), {
+  ok: false, reason: "malformed_response", retryable: false,
+});
+// A present-but-incomplete matchedAccount (no bankNumber) still fails closed.
+const badMatch = structuredClone(MINIMAL);
+delete (badMatch.data.matchedAccount as { bankNumber?: string }).bankNumber;
+assert.deepEqual(normalizeEasySlipBody(badMatch), {
+  ok: false, reason: "malformed_response", retryable: false,
+});
+
 assert.deepEqual(normalizeEasySlipBody({ success: true, data: {}, message: "ok" }), {
   ok: false, reason: "malformed_response", retryable: false,
 });
