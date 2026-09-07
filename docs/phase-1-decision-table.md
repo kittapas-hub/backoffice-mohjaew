@@ -8,6 +8,9 @@ Companion documents:
   preserved byte-for-byte from Git object `ca5c86a`.
 - [Production schema verification runbook](phase-1-production-schema-verification-runbook.md).
 - [Read-only schema verification SQL](../supabase/verify_applied_schema.sql).
+- [Controlled UAT runbook](phase-1-easyslip-uat-runbook.md) — preflight,
+  env checklist, 1 THB controlled test, duplicate-slip replay, and the
+  disable/rollback gate for migrations `0011`–`0013`.
 
 This record does not approve any owner, financial, privacy, vendor, or
 production decision. “Required position” records the safe boundary from the

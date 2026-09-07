@@ -388,14 +388,19 @@ fallback สำหรับทุกเคสที่ระบบอัตโ�
 
 | ตัวแปร | ความหมาย |
 |---|---|
+| `SLIP_VERIFICATION_ENABLED` | ต้องเป็น literal string `true` เท่านั้นถึงจะเปิดระบบ — ค่าอื่น/ไม่ตั้ง = ปิด (fail closed) |
+| `SLIP_VERIFICATION_PROVIDER` | ต้องเป็น `easyslip_v2` เท่านั้น — provider อื่นถือว่ายังไม่ได้รับอนุมัติ |
 | `EASYSLIP_API_KEY` | API key จาก developer.easyslip.com (server-only) |
 | `SLIP_RECEIVER_ACCOUNTS` | ค่าบัญชีผู้รับแบบ mask ตามที่ EasySlip รายงานสำหรับบัญชีร้าน คั่นด้วย comma (เช่น `xxx-x-x1234-x,xxx-xxx-5678`) — ว่าง = fail closed |
-| `SLIP_RECEIVER_NAMES` | (ตัวเลือก) ชื่อบัญชีผู้รับ ไทย/อังกฤษ คั่นด้วย comma |
+| `SLIP_RECEIVER_PROFILE` | รหัสโปรไฟล์ผู้รับที่เจ้าของระบบอนุมัติ ผูกติดกับทุก payment order ที่สร้างใหม่ (immutable ต่อ order) — ต้องเปลี่ยนเมื่อหมุนเวียนบัญชีรับเงิน |
+| `SLIP_RECEIVER_NAMES` | ชื่อบัญชีผู้รับ ไทย/อังกฤษ คั่นด้วย comma — ต้องตรงกับที่ EasySlip รายงานเป๊ะ (หลัง normalize) ว่าง = fail closed |
+| `PAYMENT_ORDER_IDEMPOTENCY_SECRET` | secret สุ่มสำหรับ HMAC idempotency key ของ order (กัน booking ID รั่วไหลผ่าน key ที่เก็บไว้) |
 | `BOOKING_PAYMENT_AMOUNT_THB` | ยอดที่ต้องชำระ — ใช้สร้าง payment order (แหล่งความจริงของยอด) |
 
-ต้องครบทั้ง `EASYSLIP_API_KEY` + `SLIP_RECEIVER_ACCOUNTS` +
-`BOOKING_PAYMENT_AMOUNT_THB` ระบบจึงเปิดปุ่มอัปโหลดสลิป ไม่ครบ = ใช้ flow
-ส่งสลิปทาง LINE แบบเดิมทั้งหมด
+ต้องครบทั้ง 8 ตัวแปรข้างต้นระบบจึงเปิดปุ่มอัปโหลดสลิป (ดู
+`slipVerificationConfig()` / `isSlipUploadReady()` ใน `src/lib/env.ts` และ
+`src/app/pay/[token]/pay-page-gate.ts`) ไม่ครบตัวใดตัวหนึ่ง = ใช้ flow
+ส่งสลิปทาง LINE แบบเดิมทั้งหมด (endpoint ตอบ `503 not_configured`)
 
 ### ขีดจำกัดการอัปโหลด / ข้อมูลที่เก็บ (retention)
 
@@ -403,11 +408,18 @@ fallback สำหรับทุกเคสที่ระบบอัตโ�
   ตรวจ magic bytes จริง (นามสกุลปลอม/ไฟล์ text = 400)
 - Rate limit: 10 ครั้ง/15 นาที ต่อ IP (HMAC — ไม่เก็บ IP ดิบ) และสูงสุด 10
   ครั้งต่อ payment order (เกิน = ให้ติดต่อทีมงาน)
-- **รูปสลิปไม่ถูกเก็บเลย** — ส่งต่อให้ EasySlip แล้วทิ้งทันที ไม่ลง storage
-  ไม่ลง log สิ่งที่เก็บถาวรคือหลักฐาน normalized ต่อความพยายามหนึ่งครั้งใน
-  `payment_slip_verifications` (เลขอ้างอิงธุรกรรม, เวลาโอน, ยอด, บัญชีแบบ
-  mask, ผลการตรวจ) — เพียงพอสำหรับเปิด dispute กับธนาคาร การลบข้อมูล:
-  ลบแถวใน `payment_slip_verifications` ของ booking นั้น (ไม่มี image ให้ลบ)
+- **ตั้งแต่ migration `0013`: รูปสลิปที่ผ่านการตรวจแล้วจะถูกเก็บจริง** ใน private
+  storage bucket `payment-slips` (แยกจาก `booking-faces`) ภายใต้ path ไม่ซ้ำกันต่อ
+  ครั้ง (`<booking_id>/<payment_order_id>/<uuid>.<ext>`, `upsert: false` —
+  แก้ทับกันไม่ได้) และบันทึกแถวใน `public.payment_slip_images`
+  รูปที่ **ไม่ผ่าน** local validation หรือ provider verification จะไม่ถูกเก็บเลย
+  ความล้มเหลวของการเก็บหลักฐาน (upload/DB) ไม่บล็อกการยืนยันเงินที่ตรวจผ่านแล้ว —
+  บันทึกไว้ที่ `public.payment_slip_evidence_failures` แทนเพื่อ follow-up
+  หลักฐาน normalized ต่อความพยายามหนึ่งครั้งยังคงอยู่ที่
+  `payment_slip_verifications` (เลขอ้างอิงธุรกรรม, เวลาโอน, ยอด, บัญชีแบบ mask,
+  ผลการตรวจ) ไม่ว่าจะมีรูปแนบหรือไม่ การลบข้อมูล: ลบแถวใน
+  `payment_slip_verifications` และ `payment_slip_images` ของ booking นั้น
+  พร้อมลบ object ใน bucket `payment-slips` ตาม path ที่บันทึกไว้
 - Log ปกติ redact เลขอ้างอิงธุรกรรม (เหลือ 4 ตัวท้าย) และไม่มี payload เต็ม
 
 ### ทดสอบในเครื่อง / mock
@@ -425,24 +437,46 @@ fallback สำหรับทุกเคสที่ระบบอัตโ�
 
 ### Rollout → production
 
+ลำดับ preflight → migrate → post-migration ต้องทำทีละ migration
+(0011 → 0012 → 0013) ห้ามข้ามขั้นตอนแม้ว่าจะรีบ ดูขั้นตอนละเอียดพร้อมคำสั่ง
+ที่รันได้จริงใน
+[`docs/phase-1-easyslip-uat-runbook.md`](docs/phase-1-easyslip-uat-runbook.md)
+สรุปสั้น:
+
 1. Merge หลังผ่าน review อิสระเท่านั้น
-2. รัน `supabase/migrations/0010_reconcile_0006_0009.sql` หลังตรวจ baseline
+2. ยืนยัน production migration baseline จริงก่อน (`supabase/verify_applied_schema.sql`)
+   แล้วรัน `supabase/migrations/0010_reconcile_0006_0009.sql` หลังตรวจ baseline
    แบบ read-only แล้ว และตรวจผล reconciliation ก่อนดำเนินการต่อ
-3. รัน `supabase/migrations/0011_slip_verification.sql` เฉพาะเมื่อ Gate A และ
-   Phase 1 approvals ครบแล้ว
-4. รัน `supabase/verify_0011_post_migration.sql` และ `supabase/verify_0012_production_preflight.sql`; ต้องได้ PASS ทุกแถวก่อนรัน `supabase/migrations/0012_booking_confirmed_notification.sql`
-5. หลัง 0012 รัน `supabase/verify_0012_post_migration.sql`; ต้องได้ PASS ทุกแถวก่อนเปิด worker หรือ feature gate
-6. ตั้ง env ทั้ง 3 ตัวบน Vercel Production (`SLIP_RECEIVER_ACCOUNTS` ให้เก็บ
-   ค่าจากการ verify สลิปจริงก่อนหนึ่งใบผ่าน staging)
-7. Deploy แล้วทดสอบด้วยการจอง + โอนจริงยอดเล็ก 1 รายการ
+3. รัน `supabase/verify_0011_production_preflight.sql` → ต้อง PASS ทุกแถวก่อนรัน
+   `supabase/migrations/0011_slip_verification.sql` → รัน
+   `supabase/verify_0011_post_migration.sql`
+4. รัน `supabase/verify_0012_production_preflight.sql` → ต้อง PASS ทุกแถวก่อนรัน
+   `supabase/migrations/0012_booking_confirmed_notification.sql` → รัน
+   `supabase/verify_0012_post_migration.sql`
+5. รัน `supabase/verify_0013_production_preflight.sql` → ต้อง PASS ทุกแถวก่อนรัน
+   `supabase/migrations/0013_payment_slip_notification_image.sql` → รัน
+   `supabase/verify_0013_post_migration.sql`; ต้องได้ PASS ทุกแถวก่อนเปิด worker
+   หรือ feature gate
+6. ตั้ง env ทั้ง 8 ตัว (ดูตารางด้านบน) บน Vercel Production
+   (`SLIP_RECEIVER_ACCOUNTS`/`SLIP_RECEIVER_NAMES` ให้เก็บค่าจากการ verify
+   สลิปจริงก่อนหนึ่งใบผ่าน staging)
+7. Deploy แล้วทดสอบด้วยการจอง + โอนจริงยอดเล็ก 1 รายการ (ดูขั้นตอน "1 THB
+   controlled UAT" ในรันบุ๊กด้านบน) รวมถึงทดสอบอัปโหลดสลิปใบเดิมซ้ำ
+   (duplicate-slip replay) ก่อนเปิดใช้งานจริง
 
 ### Rollback
 
-- เร็วสุด (ปิดฟีเจอร์): ลบ env `EASYSLIP_API_KEY` (หรือ
-  `SLIP_RECEIVER_ACCOUNTS`) → ปุ่มอัปโหลดหาย, endpoint ตอบ 503 fail closed,
-  flow manual เดิมทำงานเต็มรูปแบบ — ไม่ต้องแตะ DB
-- ถอน DB objects: `drop function public.confirm_slip_payment(...)` (ดูท้าย
-  ไฟล์ 0011) — เก็บตาราง `payment_slip_verifications` ไว้เป็นหลักฐาน audit
+- เร็วสุด (ปิดฟีเจอร์ทั้งหมด ไม่ต้องแตะ DB): ตั้ง `SLIP_VERIFICATION_ENABLED=false`
+  (หรือลบ env `EASYSLIP_API_KEY`/`SLIP_RECEIVER_ACCOUNTS`/`SLIP_RECEIVER_NAMES`
+  ตัวใดตัวหนึ่ง) → ปุ่มอัปโหลดหาย, ทั้ง `/api/pay/[token]/order` และ
+  `/api/pay/[token]/slip` ตอบ 503 fail closed, flow manual เดิมทำงานเต็มรูปแบบ
+- ถอน DB objects (ทำเฉพาะกรณีต้องย้อนพฤติกรรม RPC จริง ๆ): แทนที่
+  `confirm_slip_payment` / `approve_manual_review_payment` /
+  `transition_slot_booking` ด้วยเวอร์ชันก่อน 0013 (ดูหมายเหตุ ROLLBACK ท้ายไฟล์
+  `0013_payment_slip_notification_image.sql`) — **ห้าม** drop bucket
+  `payment-slips`, ตาราง `payment_slip_images`, `payment_slip_evidence_failures`,
+  หรือ `notification_image_deliveries` เก็บไว้เป็นหลักฐาน audit ทั้งหมด
+  (รวมถึง `payment_slip_verifications` จาก 0011)
 - Booking ที่ถูกยืนยันไปแล้วไม่ต้อง rollback — สถานะเดียวกับการยืนยัน manual
 
 ### Manual review (เคสที่ระบบไม่ยืนยันให้)
