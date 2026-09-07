@@ -23,6 +23,18 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const RATE_LIMIT = 5;
 const RATE_WINDOW_SECONDS = 15 * 60;
 
+async function hasUploadedObject(
+  db: ReturnType<typeof supabaseAdmin>,
+  storagePath: string,
+): Promise<boolean> {
+  const pathParts = String(storagePath).split("/");
+  const fileName = pathParts[pathParts.length - 1] ?? "";
+  const { data: objects, error } = await db.storage
+    .from("booking-faces")
+    .list("faces", { limit: 10, search: fileName });
+  return !error && objects?.some((object) => object.name === fileName) === true;
+}
+
 export async function POST(req: NextRequest) {
   // Reject malformed/oversized requests before multipart parsing allocates memory.
   const lengthDecision = validateFaceUploadContentLength(req.headers.get("content-length"));
@@ -34,23 +46,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 1. Parse multipart form.
-  let form: FormData;
-  try {
-    form = await req.formData();
-  } catch {
-    return NextResponse.json({ error: "invalid_request" }, { status: 400 });
-  }
-
-  // 2. Honeypot: real users never fill this hidden field; bots do.
-  if (String(form.get("company") ?? "").trim() !== "") {
-    return NextResponse.json(
-      { error: "invalid_input", message: "ข้อมูลไม่ถูกต้อง" },
-      { status: 400 },
-    );
-  }
-
-  // 3. Idempotency-Key — must be a valid UUID (same key ties upload to booking).
+  // 1. Idempotency-Key — must be a valid UUID (same key ties upload to booking).
   const idempotencyKey = req.headers.get("idempotency-key") ?? "";
   if (!UUID_RE.test(idempotencyKey)) {
     return NextResponse.json(
@@ -61,7 +57,7 @@ export async function POST(req: NextRequest) {
 
   const db = supabaseAdmin();
 
-  // 4. Idempotency: return the existing pending upload for this key WITHOUT
+  // 2. Idempotency: return the existing pending upload for this key WITHOUT
   //    incrementing the rate limit. Retrying a lost network response with the
   //    same key is free — only genuinely new upload attempts are counted.
   const { data: existing } = await db
@@ -78,21 +74,16 @@ export async function POST(req: NextRequest) {
     // object. Listing metadata avoids downloading the image just to verify
     // readiness; an uncertain check is retryable and does not consume a new
     // upload attempt.
-    const pathParts = String(existing.storage_path).split("/");
-    const fileName = pathParts[pathParts.length - 1] ?? "";
-    const { data: objects, error: listErr } = await db.storage
-      .from("booking-faces")
-      .list("faces", { limit: 10, search: fileName });
-    const objectReady =
-      !listErr && objects?.some((object) => object.name === fileName);
-    if (objectReady) return NextResponse.json({ uploadToken: existing.id });
+    if (await hasUploadedObject(db, existing.storage_path)) {
+      return NextResponse.json({ uploadToken: existing.id });
+    }
     return NextResponse.json(
       { error: "upload_in_progress", message: "กำลังเตรียมรูป กรุณาลองใหม่อีกครั้ง" },
       { status: 409 },
     );
   }
 
-  // 5. Rate limit: 5 new uploads / 15 min per hashed IP. Only reached when no
+  // 3. Rate limit: 5 new uploads / 15 min per hashed IP. Only reached when no
   //    existing pending upload was found, so idempotent retries never count.
   const secret = process.env.BOOKING_RATE_LIMIT_SECRET;
   if (!secret) {
@@ -111,6 +102,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "rate_limited", message: "คุณอัปโหลดรูปบ่อยเกินไป กรุณาลองใหม่ภายหลัง" },
       { status: 429 },
+    );
+  }
+
+  // 4. Parse multipart form only after the cheap request, idempotency, and
+  // rate-limit gates have run.
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return NextResponse.json({ error: "invalid_request" }, { status: 400 });
+  }
+
+  // 5. Honeypot: real users never fill this hidden field; bots do.
+  if (String(form.get("company") ?? "").trim() !== "") {
+    return NextResponse.json(
+      { error: "invalid_input", message: "ข้อมูลไม่ถูกต้อง" },
+      { status: 400 },
     );
   }
 
@@ -171,12 +179,20 @@ export async function POST(req: NextRequest) {
     if (insertErr.code === "23505") {
       const { data: raceWinner } = await db
         .from("booking_face_uploads")
-        .select("id")
+        .select("id, storage_path")
         .eq("idempotency_key", idempotencyKey)
         .eq("status", "pending")
         .gt("expires_at", new Date().toISOString())
         .maybeSingle();
-      if (raceWinner) return NextResponse.json({ uploadToken: raceWinner.id });
+      if (raceWinner && await hasUploadedObject(db, raceWinner.storage_path)) {
+        return NextResponse.json({ uploadToken: raceWinner.id });
+      }
+      if (raceWinner) {
+        return NextResponse.json(
+          { error: "upload_in_progress", message: "กำลังเตรียมรูป กรุณาลองใหม่อีกครั้ง" },
+          { status: 409 },
+        );
+      }
     }
     console.error("[face-upload] DB insert failed", insertErr);
     return NextResponse.json({ error: "server_error" }, { status: 500 });
@@ -188,11 +204,29 @@ export async function POST(req: NextRequest) {
     .upload(storagePath, buffer, { contentType: meta.type, upsert: false });
 
   if (storageErr) {
-    // Remove a possible partial object before freeing the intent row. If the
-    // DB delete also fails, the cleanup cron can still use the intent lease.
-    await db.storage.from("booking-faces").remove([storagePath]);
-    // Rollback the intent row so the idempotency key slot is freed.
-    await db.from("booking_face_uploads").delete().eq("id", uploadToken);
+    // Remove a possible partial object before freeing the intent row. If
+    // removal fails, keep the pending intent so the cleanup cron can lease and
+    // retry it; deleting the row here would strand a private face object with
+    // no durable cleanup record.
+    let cleanupSucceeded = false;
+    try {
+      const { error: cleanupErr } = await db.storage
+        .from("booking-faces")
+        .remove([storagePath]);
+      cleanupSucceeded = !cleanupErr;
+      if (cleanupErr) console.error("[face-upload] partial object cleanup failed", cleanupErr);
+    } catch (cleanupErr) {
+      console.error("[face-upload] partial object cleanup threw", cleanupErr);
+    }
+    if (cleanupSucceeded) {
+      // The object is gone, so the intent can be removed and the idempotency
+      // key slot freed. If this delete fails, the cleanup lease remains safe.
+      const { error: deleteErr } = await db
+        .from("booking_face_uploads")
+        .delete()
+        .eq("id", uploadToken);
+      if (deleteErr) console.error("[face-upload] failed to delete upload intent", deleteErr);
+    }
     console.error("[face-upload] storage upload failed", storageErr);
     return NextResponse.json(
       { error: "upload_failed", message: "อัปโหลดรูปหน้าไม่สำเร็จ กรุณาลองใหม่" },

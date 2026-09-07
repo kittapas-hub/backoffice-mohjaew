@@ -99,8 +99,13 @@ assert.equal(STATUS_POLL_INTERVAL_MS, 15_000);
 // unmount.
 // ===========================================================================
 const panelSrc = readFileSync(join(here, "BookingStatusPanel.tsx"), "utf8");
+const successPageSrc = readFileSync(join(here, "page.tsx"), "utf8");
+const uiSrc = readFileSync(join(here, "ui.tsx"), "utf8");
+const countdownSrc = readFileSync(join(here, "HoldCountdown.tsx"), "utf8");
+const lineCtaSrc = readFileSync(join(here, "LineCta.tsx"), "utf8");
 const bookingCoreSrc = readFileSync(join(here, "../../../lib/booking-core.ts"), "utf8");
 assert.match(panelSrc, /setInterval\(poll, STATUS_POLL_INTERVAL_MS\)/, "must poll on the shared 15s interval constant");
+assert.match(panelSrc, /fetch\([\s\S]*?\{ cache: "no-store" \}/, "status polling must bypass browser caches");
 assert.match(
   panelSrc,
   /if \(!shouldPollStatus\(status\)\) return;/,
@@ -142,6 +147,7 @@ assert.match(
   /status: booking\.status,[\s\S]*reference: booking\.reference,[\s\S]*paymentStatus: booking\.paymentStatus/,
   "response must be limited to booking/payment status plus the reference",
 );
+assert.match(statusRouteSrc, /Cache-Control.*no-store/, "status responses must not be cached by browsers or proxies");
 for (const pii of ["nickname", "phone", "birth_date_text", "consultation_topic"]) {
   assert.doesNotMatch(statusRouteSrc, new RegExp(pii), `status route must not expose ${pii}`);
 }
@@ -170,10 +176,55 @@ const unknownBlock = panelSrc.slice(
 assert.match(unknownBlock, /อย่าโอนเงินหรืออัปโหลดสลิปซ้ำ/);
 assert.doesNotMatch(unknownBlock, /SlipVerificationLink|qrSrc|accountNumber/);
 
+const paidBlock = panelSrc.slice(
+  panelSrc.indexOf('paymentStatus === "paid"'),
+  panelSrc.indexOf("// ── Non-pending_payment status"),
+);
+assert.match(paidBlock, /ชำระเงินแล้ว/);
+assert.doesNotMatch(
+  paidBlock,
+  /SlipVerificationLink|qrSrc|accountNumber|hasPaymentConfig/,
+  "a paid payment order must never render transfer or slip-upload actions",
+);
+const closedPaymentBlock = panelSrc.slice(
+  panelSrc.indexOf('paymentStatus === "expired"'),
+  panelSrc.indexOf("// ── Non-pending_payment status"),
+);
+assert.match(closedPaymentBlock, /กรุณาอย่าโอนเงินหรืออัปโหลดสลิปซ้ำ/);
+assert.doesNotMatch(
+  closedPaymentBlock,
+  /SlipVerificationLink|qrSrc|accountNumber|hasPaymentConfig/,
+  "a closed payment order must never render transfer or slip-upload actions",
+);
+assert.match(
+  successPageSrc,
+  /initialHoldExpired=\{!holdLive\}/,
+  "server render must gate expired or missing holds before client hydration",
+);
+assert.match(
+  panelSrc,
+  /setHoldExpired\(!Number\.isFinite\(expiry\) \|\| expiry <= Date\.now\(\)\)/,
+  "client hold gate must fail closed for invalid expiry timestamps",
+);
+assert.match(
+  countdownSrc,
+  /Number\.isFinite\(expiry\) \? expiry - Date\.now\(\) : 0/,
+  "countdown must not render NaN for an invalid expiry timestamp",
+);
+assert.match(
+  lineCtaSrc,
+  /setExpired\(!Number\.isFinite\(expiry\) \|\| expiry <= Date\.now\(\)\)/,
+  "LINE slip CTA must fail closed when its expiry is missing or invalid",
+);
+assert.match(
+  uiSrc,
+  /if \(!Number\.isFinite\(date\.getTime\(\)\)\) return "";/,
+  "deadline copy must not render Invalid Date",
+);
+
 // ===========================================================================
 // LineCta.tsx: exact CTA text + desktop fallback copy.
 // ===========================================================================
-const lineCtaSrc = readFileSync(join(here, "LineCta.tsx"), "utf8");
 assert.match(lineCtaSrc, /ส่งสลิปทาง LINE @mohjaew/, "CTA text must be exactly \"ส่งสลิปทาง LINE @mohjaew\"");
 assert.match(
   lineCtaSrc,
@@ -192,8 +243,8 @@ assert.match(
 );
 assert.match(
   panelSrc,
-  /คิวของคุณจะยืนยันก็ต่อเมื่อทีมงานตรวจสอบการชำระเงินแล้วเท่านั้น/,
-  "pending_payment view must clarify manual team verification is required to confirm",
+  /props\.slipOrderUrl[\s\S]*?ระบบตรวจสอบและยืนยันคิวเมื่อข้อมูลถูกต้อง[\s\S]*?คิวของคุณจะยืนยันก็ต่อเมื่อทีมงานตรวจสอบการชำระเงินแล้วเท่านั้น/,
+  "pending_payment view must distinguish automatic slip verification from the LINE/manual path",
 );
 
 console.log("success-page helpers: all checks passed ✓");

@@ -99,6 +99,7 @@ export default async function PayPage({
   const isExpiredOrClosed =
     order.status === "expired" ||
     order.status === "failed" ||
+    order.status === "refunded" ||
     bookingRow?.status === "expired" ||
     bookingRow?.status === "cancelled" ||
     bookingRow?.status !== "pending_payment" ||
@@ -117,7 +118,14 @@ export default async function PayPage({
     cancelled: "ยกเลิก",
   };
   const bookingStatusLabel =
-    (bookingRow?.status && BOOKING_STATUS_LABEL[bookingRow.status]) ?? "-";
+    isUnderReview
+      ? "รอตรวจสอบการชำระเงิน"
+      : isPaid && bookingRow?.status === "pending_payment"
+        ? "ชำระแล้ว รอทีมงานยืนยันคิว"
+        : ["expired", "failed", "refunded"].includes(order.status) &&
+            bookingRow?.status === "pending_payment"
+          ? "รายการชำระเงินปิดแล้ว"
+          : (bookingRow?.status && BOOKING_STATUS_LABEL[bookingRow.status]) ?? "-";
   const bookingConfirmed =
     bookingRow?.status === "confirmed" || bookingRow?.status === "completed";
   const bookingClosedAfterPayment =
@@ -201,6 +209,9 @@ export default async function PayPage({
         {summaryCard}
         <div className="checkout-alert" data-tone="neutral" style={{ marginTop: 16 }}>
           <p className="checkout-alert-title">รายการนี้หมดอายุแล้ว</p>
+          <p className="checkout-alert-body">
+            กรุณาอย่าโอนเงินหรืออัปโหลดสลิปสำหรับรายการนี้
+          </p>
           <Link href="/booking" className="checkout-link" style={{ marginTop: 8 }}>
             จองคิวใหม่
           </Link>

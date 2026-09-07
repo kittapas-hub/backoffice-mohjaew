@@ -34,14 +34,21 @@ const route = readFileSync(
   join(here, "..", "app", "api", "bookings", "face-upload", "route.ts"),
   "utf8",
 );
+const bookingForm = readFileSync(
+  join(here, "..", "app", "booking", "BookingForm.tsx"),
+  "utf8",
+);
 const lengthGuardAt = route.indexOf("validateFaceUploadContentLength");
+const rateGateAt = route.indexOf("const hits = await recordRateHit");
 const formDataAt = route.indexOf("await req.formData()");
 assert.ok(lengthGuardAt >= 0, "face-upload must validate Content-Length");
+assert.ok(rateGateAt >= 0, "face-upload must rate-limit new uploads");
 assert.ok(formDataAt >= 0, "face-upload must parse multipart form data");
 assert.ok(
   lengthGuardAt < formDataAt,
   "Content-Length guard must run before multipart parsing",
 );
+assert.ok(rateGateAt < formDataAt, "rate limit must run before multipart parsing");
 assert.match(route, /sniffImage\(buffer\)/, "face-upload must sniff real image bytes");
 assert.match(
   route,
@@ -55,8 +62,23 @@ assert.match(
 );
 assert.match(
   route,
+  /if \(insertErr\.code === "23505"\)[\s\S]*?hasUploadedObject\(db, raceWinner\.storage_path\)/,
+  "the concurrent insert-race path must verify Storage readiness before returning the token",
+);
+assert.match(
+  bookingForm,
+  /typeof uploadCandidate !== "string" \|\| !UUID_RE\.test\(uploadCandidate\)/,
+  "booking form must validate the upload token before linking the face to a booking",
+);
+assert.match(
+  route,
   /remove\(\[storagePath\]\)/,
   "failed face storage uploads must clean a possible partial object",
+);
+assert.match(
+  route,
+  /if \(cleanupSucceeded\) \{[\s\S]*?\.from\("booking_face_uploads"\)[\s\S]*?\.delete\(\)/,
+  "face-upload must retain the intent when storage cleanup fails so cron can retry",
 );
 
 console.log("face-upload guard self-check passed");

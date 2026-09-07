@@ -64,6 +64,13 @@ export async function createSlotBooking(
   const valid = validateBookingInput(raw);
   if (!valid.ok) return { ok: false, error: valid.error };
   const v = valid.value;
+  // The public slot-booking flow requires the face upload to be claimed in
+  // the same transaction as the booking. The RPC keeps its parameter
+  // optional for legacy/manual callers, but this shared current flow must not
+  // let a direct API caller bypass the UI's required face step.
+  if (!opts.faceUploadToken || !UUID_RE.test(opts.faceUploadToken)) {
+    return { ok: false, error: "face_token_invalid" };
+  }
   const logContext = {
     source: v.source,
     slotId: v.slotId,
@@ -105,9 +112,10 @@ export async function createSlotBooking(
     console.error("[booking] create returned no record", logContext);
     return { ok: false, error: "server_error" };
   }
+  const bookingRef = booking.id.slice(0, 8).toUpperCase();
   console.info("[booking] create succeeded", {
     ...logContext,
-    bookingId: booking.id,
+    bookingRef,
     status: booking.status,
   });
 
@@ -156,7 +164,10 @@ async function sendTeamNotify(b: CreatedBooking, faceSignedUrl: string | null) {
 
   const imgResult = await notifyTeamImageSafe(faceSignedUrl);
   if (!imgResult.ok) {
-    console.error("[booking] LINE image notify failed for booking", b.id);
+    console.error(
+      "[booking] LINE image notify failed for booking",
+      b.id.slice(0, 8).toUpperCase(),
+    );
     await notifyTeamSafe(
       `⚠️ ไม่สามารถส่งรูปหน้าอัตโนมัติ โปรดเปิดดูรูปจาก Backoffice: ${link}`,
     );

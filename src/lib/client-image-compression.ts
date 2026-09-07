@@ -32,15 +32,21 @@ async function loadBrowserImage(file: File): Promise<LoadedImage> {
     // Apply EXIF orientation before drawing into the canvas. Without this,
     // many phone portraits are stored sideways even though their preview was
     // upright in the gallery.
-    const bitmap = await createImageBitmap(file, {
-      imageOrientation: "from-image",
-    });
-    return {
-      source: bitmap,
-      width: bitmap.width,
-      height: bitmap.height,
-      cleanup: () => bitmap.close(),
-    };
+    try {
+      const bitmap = await createImageBitmap(file, {
+        imageOrientation: "from-image",
+      });
+      return {
+        source: bitmap,
+        width: bitmap.width,
+        height: bitmap.height,
+        cleanup: () => bitmap.close(),
+      };
+    } catch {
+      // Some mobile browsers expose createImageBitmap but reject the
+      // orientation option. Fall through to the object-URL decoder below so
+      // an unsupported optimization does not make booking impossible.
+    }
   }
 
   const url = URL.createObjectURL(file);
