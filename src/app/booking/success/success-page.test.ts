@@ -283,8 +283,13 @@ assert.match(
 );
 assert.match(
   panelSrc,
-  /<SlipUpload token=\{checkoutToken\} \/>[\s\S]*?props\.lineHref/,
-  "automatic inline upload must receive the pre-created checkout token before the secondary LINE action",
+  /<SlipUpload[\s\S]*?token=\{checkoutToken\}[\s\S]*?onConfirmed=\{\(\) => \{[\s\S]*?setPaymentStatus\("paid"\)[\s\S]*?setStatus\("confirmed"\)[\s\S]*?\}\}[\s\S]*?props\.lineHref/,
+  "automatic inline upload must receive the pre-created checkout token and clear stale hold UI immediately on confirmation",
+);
+assert.match(
+  slipUploadSrc,
+  /body\.status === "confirmed"[\s\S]*?props\.onConfirmed\?\.\(\)[\s\S]*?router\.refresh\(\)/,
+  "confirmed upload must notify its embedding page immediately before the background server refresh",
 );
 assert.doesNotMatch(
   slipUploadSrc,

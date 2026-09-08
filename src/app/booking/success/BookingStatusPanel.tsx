@@ -466,7 +466,13 @@ export function BookingStatusPanel(props: {
 
                     <div className="checkout-stack">
                       {props.slipOrderUrl && checkoutToken && (
-                        <SlipUpload token={checkoutToken} />
+                        <SlipUpload
+                          token={checkoutToken}
+                          onConfirmed={() => {
+                            setPaymentStatus("paid");
+                            setStatus("confirmed");
+                          }}
+                        />
                       )}
                       {props.lineHref && (
                         <LineCta href={props.lineHref} expiresAt={props.holdExpiresAt} />

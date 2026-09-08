@@ -11,7 +11,11 @@ import { CheckoutIcon } from "@/app/booking/success/ui";
 type Phase = "idle" | "uploading" | "verifying" | "confirmed" | "error" | "terminal";
 
 type ServerFail = { error?: string; message?: string; retryable?: boolean };
-type SlipUploadProps = { token: string };
+type SlipUploadProps = {
+  token: string;
+  /** Lets an embedding checkout update its paid/confirmed UI immediately. */
+  onConfirmed?: () => void;
+};
 
 const MAX_BYTES = 4 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -72,7 +76,11 @@ export function SlipUpload(props: SlipUploadProps) {
       const body = (xhr.response ?? {}) as { status?: string } & ServerFail;
       if (xhr.status === 200 && body.status === "confirmed") {
         setPhase("confirmed");
-        // Refresh the server component so either entry page shows paid state.
+        // The verification response is returned only after the DB confirmation
+        // transaction commits, so an embedding page can leave its stale hold
+        // UI immediately instead of waiting for the next status poll/refresh.
+        props.onConfirmed?.();
+        // Keep the server component in sync for direct-checkout entry points.
         setTimeout(() => router.refresh(), 1200);
         return;
       }

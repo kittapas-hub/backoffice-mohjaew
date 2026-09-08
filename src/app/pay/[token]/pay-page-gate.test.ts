@@ -146,7 +146,10 @@ assert.match(slipUploadSrc, /xhr\.timeout = 30_000/);
 assert.match(slipUploadSrc, /e\.currentTarget\.value = ""/);
 assert.match(slipUploadSrc, /body\.error === "manual_review"/);
 assert.match(slipUploadSrc, /body\.error === "order_closed"/);
-assert.match(slipUploadSrc, /type SlipUploadProps = \{ token: string \};/);
+assert.match(
+  slipUploadSrc,
+  /type SlipUploadProps = \{[\s\S]*?token: string;[\s\S]*?onConfirmed\?: \(\) => void;[\s\S]*?\};/,
+);
 assert.doesNotMatch(
   slipUploadSrc,
   /orderUrl|resolveCheckoutToken|fetch\(/,
