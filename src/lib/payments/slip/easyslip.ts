@@ -66,12 +66,11 @@ export function normalizeEasySlipBody(body: unknown): SlipVerifyResult {
   }
 
   const data = obj(root.data);
-  if (
-    typeof data.isDuplicate !== "boolean" ||
-    !has(data, "matchedAccount") ||
-    !has(data, "amountInSlip") ||
-    !has(data, "rawSlip")
-  ) {
+  // checkDuplicate=true is always sent, so a boolean duplicate signal is
+  // required. rawSlip carries the money/identity facts. matchedAccount and
+  // amountInSlip are OPTIONAL — the documented v2 200 example (and real
+  // bank-app PromptPay slips) omit them — so their absence is not malformed.
+  if (typeof data.isDuplicate !== "boolean" || !has(data, "rawSlip")) {
     return { ok: false, reason: "malformed_response", retryable: false };
   }
 
@@ -81,49 +80,58 @@ export function normalizeEasySlipBody(body: unknown): SlipVerifyResult {
   const txRef = str(rawSlip.transRef);
   const transferTimestamp = parseTransferDate(rawSlip.date);
   const amount = thbToSatang(rawAmount.amount);
-  const amountInSlip = thbToSatang(data.amountInSlip);
-  const currency = str(localAmount.currency)?.toUpperCase() ?? null;
+
+  // Money-critical facts: reference, timestamp, positive finite amount.
+  if (!txRef || !transferTimestamp || amount === null || amount <= 0) {
+    return { ok: false, reason: "malformed_response", retryable: false };
+  }
+
+  // Optional duplicate amount fields: when present they MUST agree exactly;
+  // when absent they are not required (documented minimal success omits them).
+  if (has(data, "amountInSlip") && thbToSatang(data.amountInSlip) !== amount) {
+    return { ok: false, reason: "malformed_response", retryable: false };
+  }
+  if (has(rawAmount, "local") && thbToSatang(localAmount.amount) !== amount) {
+    return { ok: false, reason: "malformed_response", retryable: false };
+  }
+
+  // Currency: trust an explicit local currency; default to THB for this Thai
+  // bank endpoint only when local currency is absent. Reject an explicitly
+  // foreign currency or an explicitly non-TH country. A missing countryCode is
+  // common on legitimate domestic slips (amount is the authoritative guard).
+  const localCurrency = str(localAmount.currency)?.toUpperCase() ?? null;
+  const countryCode = str(rawSlip.countryCode);
+  if (
+    (localCurrency !== null && localCurrency !== "THB") ||
+    (countryCode !== null && countryCode !== "TH")
+  ) {
+    return { ok: false, reason: "malformed_response", retryable: false };
+  }
+  const currency = localCurrency ?? "THB";
+
+  // matchedAccount is additional receiver evidence when present; absent/null
+  // yields providerMatchedAccount=false so downstream receiverMatches (in
+  // policy.ts) routes to manual review, never auto-confirm. A present-but-
+  // incomplete matchedAccount fails closed rather than fabricating a match.
+  const matched = has(data, "matchedAccount") && data.matchedAccount !== null
+    ? obj(data.matchedAccount)
+    : null;
+  if (matched !== null && !(
+    Boolean(str(matched.bankNumber)) &&
+    Boolean(str(matched.nameTh) || str(matched.nameEn)) &&
+    Boolean(str(obj(matched.bank).code))
+  )) {
+    return { ok: false, reason: "malformed_response", retryable: false };
+  }
+
   const receiver = obj(rawSlip.receiver);
   const receiverBank = obj(receiver.bank);
   const receiverAccount = obj(receiver.account);
   const receiverName = obj(receiverAccount.name);
-  const matched = data.matchedAccount === null ? null : obj(data.matchedAccount);
-  const matchedValid = matched === null || (
-    Boolean(str(matched.bankNumber)) &&
-    Boolean(str(matched.nameTh) || str(matched.nameEn)) &&
-    Boolean(str(obj(matched.bank).code))
-  );
   const sender = obj(rawSlip.sender);
   const senderBankObj = obj(sender.bank);
   const senderAccount = obj(sender.account);
   const senderNameObj = obj(senderAccount.name);
-  const countryCode = str(rawSlip.countryCode);
-
-  // Only the money-critical and match-critical facts are required. Optional
-  // provider fields — payload, countryCode, fee, ref1/ref2/ref3, and the
-  // sender/receiver display block — are legitimately absent on many real
-  // EasySlip v2 success responses (e.g. bank-app PromptPay transfers) and
-  // must NOT be treated as malformed. Absent receiver identity simply yields
-  // null evidence: it can never auto-confirm, because receiverMatches (in
-  // policy.ts) still requires providerMatchedAccount === true AND a masked
-  // account/name match, otherwise the payment routes to manual review.
-  if (
-    !txRef ||
-    !transferTimestamp ||
-    amount === null ||
-    amount <= 0 ||
-    amountInSlip !== amount ||
-    thbToSatang(localAmount.amount) !== amount ||
-    !currency ||
-    // Reject only an explicitly foreign slip; a missing countryCode is common
-    // on legitimate domestic slips and stays permitted (currency + amount are
-    // the authoritative money guarantees).
-    (countryCode !== null && countryCode !== "TH") ||
-    !matchedValid
-  ) {
-    return { ok: false, reason: "malformed_response", retryable: false };
-  }
-
   const senderName = str(senderNameObj.th) ?? str(senderNameObj.en);
   const senderBank = str(senderBankObj.short) ?? str(senderBankObj.name);
 

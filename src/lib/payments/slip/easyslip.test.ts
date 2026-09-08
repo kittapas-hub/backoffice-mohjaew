@@ -57,12 +57,10 @@ providerDuplicate.data.isDuplicate = true;
 const providerDuplicateResult = normalizeEasySlipBody(providerDuplicate);
 assert.ok(providerDuplicateResult.ok && providerDuplicateResult.slip.duplicateSignal === true);
 
+// Money-critical / required facts still fail closed when absent.
 for (const mutate of [
   (x: typeof SUCCESS) => { delete (x.data.rawSlip as { date?: string }).date; },
   (x: typeof SUCCESS) => { delete (x.data.rawSlip as { transRef?: string }).transRef; },
-  (x: typeof SUCCESS) => { delete (x.data.rawSlip.amount.local as { currency?: string }).currency; },
-  (x: typeof SUCCESS) => { delete (x.data as { amountInSlip?: number }).amountInSlip; },
-  (x: typeof SUCCESS) => { delete (x.data as { matchedAccount?: unknown }).matchedAccount; },
   (x: typeof SUCCESS) => { delete (x.data as { isDuplicate?: boolean }).isDuplicate; },
 ]) {
   const partial = structuredClone(SUCCESS);
@@ -74,10 +72,61 @@ for (const mutate of [
   });
 }
 
+// Optional duplicate/identity fields: absence must NOT be malformed. The v2
+// docs 200 example omits matchedAccount, amountInSlip, and amount.local.
+for (const drop of [
+  (x: typeof SUCCESS) => { delete (x.data as { amountInSlip?: number }).amountInSlip; },
+  (x: typeof SUCCESS) => { delete (x.data as { matchedAccount?: unknown }).matchedAccount; },
+  (x: typeof SUCCESS) => { delete (x.data.rawSlip.amount.local as { currency?: string }).currency; },
+]) {
+  const partial = structuredClone(SUCCESS);
+  drop(partial);
+  assert.ok(
+    normalizeEasySlipBody(partial).ok,
+    "absent optional field must not be malformed",
+  );
+}
+
 const unmatched = structuredClone(SUCCESS);
 unmatched.data.matchedAccount = null as unknown as typeof SUCCESS.data.matchedAccount;
 const unmatchedResult = normalizeEasySlipBody(unmatched);
 assert.ok(unmatchedResult.ok && unmatchedResult.slip.receiver.providerMatchedAccount === false);
+
+// EXACT current EasySlip docs 200 example shape (redacted values only): no
+// matchedAccount, amountInSlip, amount.local, countryCode, fee, or refs. Must
+// normalize successfully with providerMatchedAccount=false (fail-closed match).
+const DOCS_EXAMPLE = {
+  success: true,
+  data: {
+    isDuplicate: false,
+    rawSlip: {
+      payload: "00000000000000000000000000000000000000",
+      transRef: "TX-DOCS-1",
+      date: "2026-09-08T05:06:00Z",
+      amount: { amount: 1 },
+      sender: {
+        bank: { id: "014", name: "ไทยพาณิชย์", short: "SCB" },
+        account: { name: { th: "ผู้โอน" } },
+      },
+      receiver: {
+        bank: { id: "004", name: "กสิกรไทย", short: "KBANK" },
+        account: { name: { th: "ร้านหมอแจ๋ว" } },
+      },
+    },
+  },
+  message: "Bank slip verified successfully",
+};
+const docs = normalizeEasySlipBody(DOCS_EXAMPLE);
+assert.ok(docs.ok, "documented EasySlip v2 200 example must parse");
+if (docs.ok) {
+  assert.equal(docs.slip.amountSatang, 100);
+  assert.equal(docs.slip.currency, "THB"); // defaulted: local currency absent
+  assert.equal(docs.slip.providerTransactionReference, "TX-DOCS-1");
+  assert.equal(docs.slip.transferTimestamp?.toISOString(), "2026-09-08T05:06:00.000Z");
+  assert.equal(docs.slip.receiver.providerMatchedAccount, false); // no matchedAccount
+  assert.equal(docs.slip.receiver.bankShort, "KBANK");
+  assert.equal(docs.slip.senderDisplay, "ผู้โอน / SCB");
+}
 
 // Real-world minimal EasySlip v2 success (the UAT regression): a bank-app
 // PromptPay transfer that omits every optional field — payload, countryCode,
