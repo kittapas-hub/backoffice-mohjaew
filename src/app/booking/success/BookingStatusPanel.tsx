@@ -15,6 +15,8 @@ type StatusResponse = {
   paymentStatus: string | null;
 };
 
+type OrderInitState = "idle" | "loading" | "ready" | "error";
+
 export function BookingStatusPanel(props: {
   token: string;
   initialStatus: string;
@@ -48,6 +50,10 @@ export function BookingStatusPanel(props: {
   // this branch entirely (see the !shouldPollStatus(status) render below),
   // so a locally-computed expiry can never mask or fight a server transition.
   const [holdExpired, setHoldExpired] = useState(props.initialHoldExpired);
+  const [checkoutToken, setCheckoutToken] = useState<string | null>(null);
+  const [orderInitState, setOrderInitState] = useState<OrderInitState>("idle");
+  const [orderInitAttempt, setOrderInitAttempt] = useState(0);
+
   useEffect(() => {
     if (!props.holdExpiresAt) {
       setHoldExpired(true);
@@ -61,6 +67,54 @@ export function BookingStatusPanel(props: {
     const id = setInterval(check, 1000);
     return () => clearInterval(id);
   }, [props.holdExpiresAt]);
+
+  // Automatic verification must have a durable payment order before the UI
+  // reveals any QR/account transfer instructions. The POST endpoint is
+  // idempotent, so refresh/retry is safe while GET rendering stays read-only.
+  useEffect(() => {
+    const terminalPayment = new Set([
+      "manual_review", "paid", "expired", "failed", "refunded", "unknown",
+    ]);
+    if (
+      !props.slipOrderUrl ||
+      status !== "pending_payment" ||
+      holdExpired ||
+      terminalPayment.has(paymentStatus ?? "")
+    ) return;
+
+    let cancelled = false;
+    const initOrder = async () => {
+      setOrderInitState("loading");
+      try {
+        const res = await fetch(props.slipOrderUrl!, {
+          method: "POST",
+          credentials: "same-origin",
+        });
+        const parsed: unknown = await res.json();
+        const token =
+          parsed && typeof parsed === "object"
+            ? (parsed as { checkoutToken?: unknown }).checkoutToken
+            : null;
+        if (!res.ok || typeof token !== "string" || token.length === 0) {
+          throw new Error("order_unavailable");
+        }
+        if (!cancelled) {
+          setCheckoutToken(token);
+          setOrderInitState("ready");
+        }
+      } catch {
+        if (!cancelled) {
+          setCheckoutToken(null);
+          setOrderInitState("error");
+        }
+      }
+    };
+
+    void initOrder();
+    return () => {
+      cancelled = true;
+    };
+  }, [props.slipOrderUrl, status, paymentStatus, holdExpired, orderInitAttempt]);
 
   // Re-checks status via the opaque success token only (never a raw booking
   // id) while pending_payment, at a fixed 15s cadence. Stops as soon as the
@@ -332,52 +386,78 @@ export function BookingStatusPanel(props: {
                   </Link>
                 </div>
               ) : props.hasPaymentConfig ? (
-                <>
-                  <p className="checkout-note checkout-note-center" style={{ marginTop: 0, marginBottom: 16 }}>
-                    โอนยอดเต็มจำนวน แล้วส่งสลิปพร้อมเลขอ้างอิงด้านล่าง
-                  </p>
+                props.slipOrderUrl && (!checkoutToken || orderInitState !== "ready") ? (
+                  orderInitState === "error" ? (
+                    <div className="checkout-alert" data-tone="warn" role="alert">
+                      <p className="checkout-alert-title">ยังเตรียมรายการชำระเงินไม่สำเร็จ</p>
+                      <p className="checkout-alert-body">
+                        ระบบยังไม่แสดง QR หรือข้อมูลโอนเงินจนกว่าจะสร้างรายการชำระเงินสำเร็จ
+                      </p>
+                      <button
+                        type="button"
+                        className="checkout-btn"
+                        style={{ marginTop: 14 }}
+                        onClick={() => setOrderInitAttempt((value) => value + 1)}
+                      >
+                        ลองอีกครั้ง
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="checkout-alert" data-tone="neutral" aria-live="polite">
+                      <p className="checkout-alert-title">กำลังเตรียมรายการชำระเงิน…</p>
+                      <p className="checkout-alert-body">
+                        กรุณารอสักครู่ ระบบจะแสดง QR และข้อมูลโอนเงินเมื่อรายการพร้อม
+                      </p>
+                    </div>
+                  )
+                ) : (
+                  <>
+                    <p className="checkout-note checkout-note-center" style={{ marginTop: 0, marginBottom: 16 }}>
+                      โอนยอดเต็มจำนวน แล้วส่งสลิปพร้อมเลขอ้างอิงด้านล่าง
+                    </p>
 
-                  {props.hasQR && (
-                    /* eslint-disable-next-line @next/next/no-img-element */
-                    <img
-                      src={props.qrSrc}
-                      alt="QR Code สำหรับโอนเงิน"
-                      width={220}
-                      height={220}
-                      className="checkout-qr"
-                    />
-                  )}
-
-                  <dl className="checkout-rows" style={{ marginBottom: 16 }}>
-                    <Row label="ธนาคาร" value={props.bankName} />
-                    <Row label="ชื่อบัญชี" value={props.accountName} />
-                    <Row
-                      label="เลขบัญชี"
-                      value={props.accountNumber}
-                      action={<CopyButton text={props.accountNumber} label="คัดลอก" />}
-                    />
-                    <Row
-                      label="เลขอ้างอิง"
-                      value={props.reference}
-                      action={<CopyButton text={props.reference} label="คัดลอก" />}
-                    />
-                  </dl>
-
-                  <div className="checkout-stack">
-                    {props.slipOrderUrl && (
-                      <SlipUpload orderUrl={props.slipOrderUrl} />
+                    {props.hasQR && (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={props.qrSrc}
+                        alt="QR Code สำหรับโอนเงิน"
+                        width={220}
+                        height={220}
+                        className="checkout-qr"
+                      />
                     )}
-                    {props.lineHref && (
-                      <LineCta href={props.lineHref} expiresAt={props.holdExpiresAt} />
-                    )}
-                  </div>
 
-                  <p className="checkout-note checkout-note-center" style={{ marginTop: 14 }}>
-                    {props.slipOrderUrl
-                      ? "ส่งผ่านปุ่มตรวจสอบอัตโนมัติเพื่อให้ระบบตรวจสอบและยืนยันคิวเมื่อข้อมูลถูกต้อง หากส่งสลิปทาง LINE ทีมงานจะตรวจสอบให้"
-                      : "คิวของคุณจะยืนยันก็ต่อเมื่อทีมงานตรวจสอบการชำระเงินแล้วเท่านั้น"}
-                  </p>
-                </>
+                    <dl className="checkout-rows" style={{ marginBottom: 16 }}>
+                      <Row label="ธนาคาร" value={props.bankName} />
+                      <Row label="ชื่อบัญชี" value={props.accountName} />
+                      <Row
+                        label="เลขบัญชี"
+                        value={props.accountNumber}
+                        action={<CopyButton text={props.accountNumber} label="คัดลอก" />}
+                      />
+                      <Row
+                        label="เลขอ้างอิง"
+                        value={props.reference}
+                        action={<CopyButton text={props.reference} label="คัดลอก" />}
+                      />
+                    </dl>
+
+                    <div className="checkout-stack">
+                      {props.slipOrderUrl && checkoutToken && (
+                        <SlipUpload token={checkoutToken} />
+                      )}
+                      {props.lineHref && (
+                        <LineCta href={props.lineHref} expiresAt={props.holdExpiresAt} />
+                      )}
+                    </div>
+
+                    <p className="checkout-note checkout-note-center" style={{ marginTop: 14 }}>
+                      {props.slipOrderUrl
+                        ? "ส่งผ่านปุ่มตรวจสอบอัตโนมัติเพื่อให้ระบบตรวจสอบและยืนยันคิวเมื่อข้อมูลถูกต้อง หากส่งสลิปทาง LINE ทีมงานจะตรวจสอบให้"
+                        : "คิวของคุณจะยืนยันก็ต่อเมื่อทีมงานตรวจสอบการชำระเงินแล้วเท่านั้น"}
+                    </p>
+                  </>
+                )
               ) : (
                 <p className="checkout-alert" data-tone="neutral">
                   ทีมงานจะติดต่อเพื่อแจ้งรายละเอียดการชำระเงิน

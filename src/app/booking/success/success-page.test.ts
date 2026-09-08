@@ -103,6 +103,7 @@ const successPageSrc = readFileSync(join(here, "page.tsx"), "utf8");
 const uiSrc = readFileSync(join(here, "ui.tsx"), "utf8");
 const countdownSrc = readFileSync(join(here, "HoldCountdown.tsx"), "utf8");
 const lineCtaSrc = readFileSync(join(here, "LineCta.tsx"), "utf8");
+const slipUploadSrc = readFileSync(join(here, "..", "..", "pay", "[token]", "SlipUpload.tsx"), "utf8");
 const bookingCoreSrc = readFileSync(join(here, "../../../lib/booking-core.ts"), "utf8");
 assert.match(panelSrc, /setInterval\(poll, STATUS_POLL_INTERVAL_MS\)/, "must poll on the shared 15s interval constant");
 assert.match(panelSrc, /fetch\([\s\S]*?\{ cache: "no-store" \}/, "status polling must bypass browser caches");
@@ -262,8 +263,33 @@ assert.match(
 );
 assert.match(
   panelSrc,
-  /props\.slipOrderUrl && \([\s\S]*?<SlipUpload orderUrl=\{props\.slipOrderUrl\} \/>[\s\S]*?props\.lineHref/,
-  "automatic inline upload must render before the secondary LINE action",
+  /fetch\(props\.slipOrderUrl![\s\S]*?method: "POST"[\s\S]*?setCheckoutToken\(token\)[\s\S]*?setOrderInitState\("ready"\)/,
+  "booking success must create the payment order client-side before marking payment instructions ready",
+);
+assert.match(
+  panelSrc,
+  /props\.slipOrderUrl && \(!checkoutToken \|\| orderInitState !== "ready"\)/,
+  "QR/account instructions must be gated until payment-order initialization succeeds",
+);
+assert.match(
+  panelSrc,
+  /ยังไม่แสดง QR หรือข้อมูลโอนเงินจนกว่าจะสร้างรายการชำระเงินสำเร็จ/,
+  "order initialization failure must fail closed instead of revealing transfer instructions",
+);
+assert.match(
+  panelSrc,
+  /<SlipUpload token=\{checkoutToken\} \/>[\s\S]*?props\.lineHref/,
+  "automatic inline upload must receive the pre-created checkout token before the secondary LINE action",
+);
+assert.doesNotMatch(
+  slipUploadSrc,
+  /orderUrl|resolveCheckoutToken|fetch\(/,
+  "SlipUpload must never lazily create a payment order after the customer has already transferred",
+);
+assert.match(
+  slipUploadSrc,
+  /upload\(file, props\.token\)/,
+  "SlipUpload must submit with the already-resolved checkout token",
 );
 assert.doesNotMatch(panelSrc, /SlipVerificationLink/, "booking success must not use the redirect-only uploader");
 

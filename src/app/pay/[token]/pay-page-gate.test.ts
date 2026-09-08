@@ -146,25 +146,23 @@ assert.match(slipUploadSrc, /xhr\.timeout = 30_000/);
 assert.match(slipUploadSrc, /e\.currentTarget\.value = ""/);
 assert.match(slipUploadSrc, /body\.error === "manual_review"/);
 assert.match(slipUploadSrc, /body\.error === "order_closed"/);
-assert.match(slipUploadSrc, /\| \{ token: string; orderUrl\?: never \}/);
-assert.match(slipUploadSrc, /\| \{ token\?: never; orderUrl: string \}/);
-assert.match(slipUploadSrc, /fetch\(props\.orderUrl, \{\s*method: "POST"/);
-assert.equal(
-  slipUploadSrc.match(/resolveCheckoutToken\(/g)?.length,
-  2,
-  "checkout order creation must occur only from the selected-file handler",
+assert.match(slipUploadSrc, /type SlipUploadProps = \{ token: string \};/);
+assert.doesNotMatch(
+  slipUploadSrc,
+  /orderUrl|resolveCheckoutToken|fetch\(/,
+  "SlipUpload must never create a payment order lazily after transfer",
 );
 assert.match(
   slipUploadSrc,
-  /async function onFile\(file: File \| null\)[\s\S]*?const checkoutToken = await resolveCheckoutToken\(\);\s*upload\(file, checkoutToken\);/,
-  "booking-success mode must upload the same selected File after resolving its opaque checkout token",
+  /async function onFile\(file: File \| null\)[\s\S]*?upload\(file, props\.token\);/,
+  "uploader must submit the selected file with an already-created checkout token",
 );
 assert.match(slipUploadSrc, /ALLOWED_TYPES\.has\(file\.type\)/, "client MIME guard must remain enabled");
 assert.match(slipUploadSrc, /file\.size > MAX_BYTES/, "the 4 MB client size guard must remain enabled");
 assert.match(
   slipUploadSrc,
-  /phase === "preparing" \|\| phase === "uploading" \|\| phase === "verifying"/,
-  "the picker must stay disabled while the checkout order is being resolved",
+  /phase === "uploading" \|\| phase === "verifying"/,
+  "the picker must stay disabled while upload/verification is in progress",
 );
 assert.match(slipUploadSrc, /router\.refresh\(\)/, "successful or terminal verification must refresh server state");
 assert.doesNotMatch(slipUploadSrc, /window\.location|router\.push/, "inline upload must not redirect to /pay");

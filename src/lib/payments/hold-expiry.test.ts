@@ -219,18 +219,19 @@ assert.match(
 );
 assert.doesNotMatch(expiredBlock, /qrSrc|accountNumber|CopyButton|LineCta/, "expired block must not render any payment instruction");
 
-// The non-expired branch (props.hasPaymentConfig true) must be unchanged:
-// QR, bank details, reference, copy buttons, and the LINE CTA still render
-// normally when the hold has not expired.
+// The non-expired branch still contains QR/bank/reference/copy/LINE actions,
+// but automatic verification must gate them behind successful payment-order
+// initialization so a customer can never transfer before order.created_at.
 const notExpiredBlock = paymentSection.slice(
   paymentSection.indexOf(") : props.hasPaymentConfig"),
-  paymentSection.indexOf(") : (", paymentSection.indexOf(") : props.hasPaymentConfig") + 1),
 );
-assert.match(notExpiredBlock, /props\.qrSrc/, "QR image must still render before expiry");
-assert.match(notExpiredBlock, /props\.accountNumber/, "account number must still render before expiry");
-assert.match(notExpiredBlock, /props\.reference/, "reference must still render before expiry");
-assert.match(notExpiredBlock, /CopyButton/, "copy buttons must still render before expiry");
-assert.match(notExpiredBlock, /LineCta/, "LINE CTA must still render before expiry");
+assert.match(notExpiredBlock, /props\.slipOrderUrl && \(!checkoutToken \|\| orderInitState !== "ready"\)/,
+  "automatic payment instructions must stay hidden until the order is ready");
+assert.match(notExpiredBlock, /props\.qrSrc/, "QR image must render after order initialization");
+assert.match(notExpiredBlock, /props\.accountNumber/, "account number must render after order initialization");
+assert.match(notExpiredBlock, /props\.reference/, "reference must render after order initialization");
+assert.match(notExpiredBlock, /CopyButton/, "copy buttons must render after order initialization");
+assert.match(notExpiredBlock, /LineCta/, "LINE CTA must render after order initialization");
 
 // ===========================================================================
 // Booking-detail admin route (/admin/bookings/[id]): the expired-hold
