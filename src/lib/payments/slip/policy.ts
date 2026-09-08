@@ -50,26 +50,15 @@ export function receiverMatches(
   receiver: NormalizedSlipVerification["receiver"],
   config: ReceiverConfig,
 ): boolean {
-  if (
-    config.accounts.length === 0 ||
-    config.names.length === 0 ||
-    receiver.providerMatchedAccount !== true
-  ) return false; // fail closed: no profile or no provider-side match
-
-  const expected = config.accounts.map(normalizeAccount).filter(Boolean);
-  const actual = [receiver.accountMasked, receiver.proxyMasked]
-    .filter((v): v is string => Boolean(v))
-    .map(normalizeAccount);
-  const matchingAccounts = [...new Set(actual.filter((a) => expected.includes(a)))];
-  if (matchingAccounts.length !== 1) return false;
-
-  // Secondary factor: when both sides have names, they must agree too.
-  const providerNames = [receiver.nameTh, receiver.nameEn]
-    .filter((v): v is string => Boolean(v))
-    .map(normalizeName);
-  const expectedNames = config.names.map(normalizeName).filter(Boolean);
-  const matchingNames = [...new Set(providerNames.filter((n) => expectedNames.includes(n)))];
-  return matchingNames.length === 1;
+  // Keep the local release gate fail-closed: automatic confirmation is only
+  // enabled for an explicitly configured receiver profile. Once EasySlip v2
+  // has matched the slip receiver to that registered merchant account,
+  // matchedAccount is the authoritative receiver-identity decision. Do not
+  // veto it by re-comparing raw masked bank/proxy/name fields: PromptPay and
+  // E-Wallet slips can expose a different mask/name form than the registered
+  // account even when EasySlip has already matched the receiver successfully.
+  if (config.accounts.length === 0 || config.names.length === 0) return false;
+  return receiver.providerMatchedAccount === true;
 }
 
 /** Validate a verified slip against the trusted order values.

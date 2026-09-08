@@ -13,9 +13,17 @@ const slip: NormalizedSlipVerification = {
 };
 const profile = { accounts: ["xxx-x-x1234-x"], names: ["ร้าน มอเจ๋ว"] };
 
-assert.equal(receiverMatches(receiver, profile), true, "requires provider match plus account/name evidence");
+assert.equal(receiverMatches(receiver, profile), true, "provider matchedAccount is authoritative when local profile is configured");
 assert.equal(receiverMatches({ ...receiver, providerMatchedAccount: false }, profile), false);
-assert.equal(receiverMatches({ ...receiver, nameTh: null }, profile), false);
+assert.equal(
+  receiverMatches(
+    { ...receiver, accountMasked: null, proxyMasked: "XXXXXXXXXXX0208", nameTh: "เติมเงินพร้อมเพย์" },
+    profile,
+  ),
+  true,
+  "PromptPay raw mask/name must not veto EasySlip matchedAccount=true",
+);
+assert.equal(receiverMatches(receiver, { ...profile, accounts: [] }), false);
 assert.equal(receiverMatches(receiver, { ...profile, names: [] }), false);
 assert.deepEqual(evaluateSlipPolicy(slip), { ok: true });
 assert.deepEqual(evaluateSlipPolicy({ ...slip, providerTransactionReference: " " }), { ok: false, code: "tx_ref_missing" });

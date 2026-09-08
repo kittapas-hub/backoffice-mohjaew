@@ -13,6 +13,7 @@ export function buildEvidence(slip: NormalizedSlipVerification) {
     amount_satang: slip.amountSatang,
     currency: slip.currency,
     provider_duplicate: slip.duplicateSignal,
+    provider_matched_account: slip.receiver.providerMatchedAccount === true,
     receiver_bank: slip.receiver.bankShort,
     receiver_account_masked: slip.receiver.accountMasked,
     receiver_proxy_masked: slip.receiver.proxyMasked,
