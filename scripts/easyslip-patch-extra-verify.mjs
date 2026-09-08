@@ -11,7 +11,7 @@ const patch = await fetch(`${base}/${id}`, {
   body: JSON.stringify({ extraVerify: null }),
 });
 const patchBody = await patch.json().catch(() => ({}));
-console.log(`[easyslip-patch] status=${patch.status} success=${patchBody?.success === true}`);
+console.log(`[easyslip-patch] status=${patch.status} success=${patchBody?.success === true} responseExtraVerify=${patchBody?.data?.extraVerify ?? "null"}`);
 if (!patch.ok || patchBody?.success !== true) {
   console.log(`[easyslip-patch] errorCode=${patchBody?.error?.code ?? "unknown"}`);
   throw new Error("EasySlip PATCH failed");
@@ -19,7 +19,8 @@ if (!patch.ok || patchBody?.success !== true) {
 
 const get = await fetch(base, { headers: { Authorization: `Bearer ${key}` } });
 const getBody = await get.json().catch(() => ({}));
-const accounts = Array.isArray(getBody?.data) ? getBody.data : [];
+const data = getBody?.data;
+const accounts = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
 const account = accounts.find((x) => x?.id === id);
 console.log(`[easyslip-patch] verifyStatus=${get.status} found=${Boolean(account)} extraVerify=${account?.extraVerify ?? "null"}`);
 if (!get.ok || !account || account.extraVerify !== null) {
