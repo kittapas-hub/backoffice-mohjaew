@@ -218,15 +218,15 @@ export function easySlipProvider(opts: {
         const matchedObj = obj(data.matchedAccount);
         const matchedBank = obj(matchedObj.bank);
         console.warn("[easyslip] malformed response shape", {
-          rootSuccess: root.success, rootMessageType: typeof root.message, dataKeys: Object.keys(data).sort(),
+          rootSuccess: root.success, rootMessageType: typeof root.message, rootMessagePresent: Boolean(str(root.message)), dataKeys: Object.keys(data).sort(),
           isDuplicateType: typeof data.isDuplicate, rawSlipKeys: Object.keys(raw).sort(),
-          txRefType: typeof raw.transRef, dateType: typeof raw.date, rawAmountType: typeof amount.amount,
-          rawAmountValue: typeof amount.amount === "number" ? amount.amount : null, localPresent: has(amount, "local"),
-          localAmountType: typeof local.amount, localCurrency: str(local.currency), countryCode: str(raw.countryCode),
+          txRefType: typeof raw.transRef, txRefPresent: Boolean(str(raw.transRef)), dateType: typeof raw.date, dateParseable: Boolean(parseTransferDate(raw.date)), rawAmountType: typeof amount.amount,
+          rawAmountValue: typeof amount.amount === "number" ? amount.amount : null, rawAmountSatang: thbToSatang(amount.amount), localPresent: has(amount, "local"),
+          localAmountType: typeof local.amount, localAmountValue: typeof local.amount === "number" ? local.amount : null, localAmountSatang: thbToSatang(local.amount), localCurrency: str(local.currency), countryCode: str(raw.countryCode),
           matchedAccountPresent: has(data, "matchedAccount"), matchedAccountNull: data.matchedAccount === null,
           matchedKeys: Object.keys(matchedObj).sort(), matchedBankCodePresent: Boolean(str(matchedBank.code) || str(matchedBank.shortCode)),
           matchedBankNumberPresent: Boolean(str(matchedObj.bankNumber)), matchedNamePresent: Boolean(str(matchedObj.nameTh) || str(matchedObj.nameEn)),
-          amountInSlipPresent: has(data, "amountInSlip"), amountInSlipType: typeof data.amountInSlip,
+          amountInSlipPresent: has(data, "amountInSlip"), amountInSlipType: typeof data.amountInSlip, amountInSlipValue: typeof data.amountInSlip === "number" ? data.amountInSlip : null, amountInSlipSatang: thbToSatang(data.amountInSlip),
         });
       }
       return normalized;
