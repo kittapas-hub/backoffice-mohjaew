@@ -178,6 +178,20 @@ zeroAmount.data.rawSlip.amount = { amount: 0, local: { amount: 0, currency: "THB
 assert.deepEqual(normalizeEasySlipBody(zeroAmount), {
   ok: false, reason: "malformed_response", retryable: false,
 });
+// Real EasySlip UAT shape: local amount may be a zero placeholder when its
+// currency is null. Canonical amount and amountInSlip still agree at 1 THB.
+const localPlaceholder = structuredClone(MINIMAL);
+localPlaceholder.data.matchedAccount = null as unknown as typeof localPlaceholder.data.matchedAccount;
+localPlaceholder.data.rawSlip.amount.local.amount = 0;
+(localPlaceholder.data.rawSlip.amount.local as { amount: number; currency: string | null }).currency = null;
+const localPlaceholderResult = normalizeEasySlipBody(localPlaceholder);
+assert.ok(localPlaceholderResult.ok, "null-currency local placeholder must not reject a valid slip");
+if (localPlaceholderResult.ok) {
+  assert.equal(localPlaceholderResult.slip.amountSatang, 100);
+  assert.equal(localPlaceholderResult.slip.currency, "THB");
+  assert.equal(localPlaceholderResult.slip.receiver.providerMatchedAccount, false);
+}
+
 const localMismatch = structuredClone(MINIMAL);
 localMismatch.data.rawSlip.amount.local.amount = 2;
 assert.deepEqual(normalizeEasySlipBody(localMismatch), {
