@@ -73,6 +73,13 @@ export function slipVerificationEnabled(): boolean {
   return slipVerificationConfig().enabled;
 }
 
+export type NotificationDeliveryScope = "production" | "preview";
+
+/** Shared Supabase is used by Preview and Production; all Preview writes must stay non-deliverable by Production workers. */
+export function notificationDeliveryScope(): NotificationDeliveryScope {
+  return process.env.VERCEL_ENV === "production" ? "production" : "preview";
+}
+
 export type PromptPayQrTarget =
   | { kind: "msisdn"; value: string }
   | { kind: "natId"; value: string }

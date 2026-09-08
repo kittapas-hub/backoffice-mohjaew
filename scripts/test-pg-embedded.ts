@@ -218,7 +218,8 @@ try {
   await runPassFailVerifier("verify_0013_post_migration.sql");
   await applyMigration("0018_guard_manual_review_booking_override.sql");
   await applyMigration("0019_recover_provider_duplicate_slip.sql");
-  console.log("[test-pg-embedded] booking/payment migrations through 0019 applied successfully.");
+  await applyMigration("0020_preview_notification_isolation.sql");
+  console.log("[test-pg-embedded] booking/payment migrations through 0020 applied successfully.");
 
   await client.end();
 

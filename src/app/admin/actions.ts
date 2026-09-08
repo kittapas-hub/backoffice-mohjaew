@@ -6,6 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import { supabaseServer } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/auth";
 import { mapTransitionError } from "@/lib/confirm-error";
+import { notificationDeliveryScope } from "@/lib/env";
 
 // Legacy statuses an admin may set on a NON-slot (legacy/manual) booking only.
 const LEGACY_STATUSES = ["pending", "contacted", "confirmed", "cancelled"] as const;
@@ -20,9 +21,10 @@ export async function transitionSlotBooking(formData: FormData) {
   if (!id || !to) return;
 
   const db = supabaseAdmin();
-  const { error } = await db.rpc("transition_slot_booking", {
+  const { error } = await db.rpc("transition_slot_booking_scoped", {
     p_booking_id: id,
     p_to: to,
+    p_delivery_scope: notificationDeliveryScope(),
   });
 
   revalidatePath("/admin");
@@ -54,8 +56,9 @@ export async function confirmPayment(formData: FormData) {
   const redirectTo = String(formData.get("redirectTo") ?? "/admin");
   if (!id) return;
 
-  const { error } = await supabaseAdmin().rpc("approve_manual_review_payment", {
+  const { error } = await supabaseAdmin().rpc("approve_manual_review_payment_scoped", {
     p_booking_id: id,
+    p_delivery_scope: notificationDeliveryScope(),
   });
 
   revalidatePath("/admin");
@@ -111,9 +114,10 @@ export async function confirmBookingOverride(formData: FormData) {
     redirect(`${redirectTo}${sep}error=hold_expired`);
   }
 
-  const { error } = await db.rpc("transition_slot_booking", {
+  const { error } = await db.rpc("transition_slot_booking_scoped", {
     p_booking_id: id,
     p_to: "confirmed", // never from client
+    p_delivery_scope: notificationDeliveryScope(),
   });
 
   revalidatePath("/admin");

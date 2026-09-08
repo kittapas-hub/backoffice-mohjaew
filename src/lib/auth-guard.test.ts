@@ -115,7 +115,7 @@ for (const [file, names] of Object.entries(actionFiles)) {
 {
   const src = readFileSync(join(appDir, "admin/actions.ts"), "utf8");
   const body = fnBody(src, "confirmPayment");
-  assert.match(body, /rpc\(["']approve_manual_review_payment["']/);
+  assert.match(body, /rpc\(["']approve_manual_review_payment_scoped["']/);
   assert.doesNotMatch(body, /formData\.get\(["'](transaction|txRef|providerTxRef)["']\)/);
   assert.doesNotMatch(body, /transition_slot_booking/);
 }

@@ -290,7 +290,7 @@ assert.match(faceMigration, /v_slot\.start_time\s*<=/, "0003 create_booking must
 const adminActions = read("app/admin/actions.ts");
 assert.match(
   adminActions,
-  /rpc\(\s*["'`]transition_slot_booking["'`]/,
+  /rpc\(\s*["'`]transition_slot_booking(?:_scoped)?["'`]/,
   "admin must transition slot bookings via the RPC",
 );
 // updateStatus must refuse slot bookings (no direct status update path for them).

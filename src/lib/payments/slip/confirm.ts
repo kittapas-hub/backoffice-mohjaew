@@ -3,7 +3,7 @@
 // sequence of application writes. Rejected pre-RPC attempts are recorded
 // best-effort for audit; their failure never blocks the customer response.
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { slipVerificationEnabled } from "@/lib/env";
+import { notificationDeliveryScope, slipVerificationEnabled } from "@/lib/env";
 import { buildEvidence, redactTxRef } from "./evidence.ts";
 import type { NormalizedSlipVerification } from "./types.ts";
 
@@ -23,7 +23,7 @@ export async function confirmSlipPayment(opts: {
 }): Promise<SlipConfirmResult> {
   if (!slipVerificationEnabled()) return { result: "error" };
   const db = supabaseAdmin();
-  const { data, error } = await db.rpc("confirm_slip_payment", {
+  const { data, error } = await db.rpc("confirm_slip_payment_scoped", {
     p_payment_order_id: opts.paymentOrderId,
     p_provider: opts.slip.provider,
     p_provider_tx_ref: opts.slip.providerTransactionReference,
@@ -32,6 +32,7 @@ export async function confirmSlipPayment(opts: {
     p_currency: opts.slip.currency,
     p_receiver_profile: opts.receiverProfile,
     p_evidence: buildEvidence(opts.slip),
+    p_delivery_scope: notificationDeliveryScope(),
   });
 
   if (error) {
