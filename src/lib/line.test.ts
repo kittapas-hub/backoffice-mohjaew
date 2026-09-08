@@ -6,7 +6,13 @@ process.env.LINE_CHANNEL_ACCESS_TOKEN = "test-token-do-not-log";
 process.env.LINE_CHANNEL_SECRET = "test-secret";
 process.env.LINE_BOOKING_GROUP_ID = "C" + "0".repeat(32);
 
-const { pushMessage, pushImageMessage, validateLineGroupId } = await import("./line.ts");
+const {
+  pushMessage,
+  pushImageMessage,
+  validateLineGroupId,
+  notifyTeamSafe,
+  notifyTeamImageSafe,
+} = await import("./line.ts");
 
 // ===========================================================================
 // validateLineGroupId: only a real LINE groupId (C + 32 hex chars) passes.
@@ -45,6 +51,28 @@ const originalFetch = globalThis.fetch;
 function mockFetch(handler: () => Promise<Response> | Response | never) {
   globalThis.fetch = (async () => handler()) as typeof fetch;
 }
+
+// Preview notifications are an explicit environment opt-in. If Preview has
+// both the LINE token and the validated booking group configured, direct UAT
+// booking text/image notifications must be sent; durable outbox isolation is
+// tested separately and still prevents Production cron from draining Preview.
+process.env.VERCEL_ENV = "preview";
+let previewTextTo: string | null = null;
+let previewImageTo: string | null = null;
+globalThis.fetch = (async (_url, init) => {
+  const body = JSON.parse(String(init?.body ?? "{}")) as {
+    to?: string;
+    messages?: Array<{ type?: string }>;
+  };
+  if (body.messages?.[0]?.type === "image") previewImageTo = body.to ?? null;
+  else previewTextTo = body.to ?? null;
+  return new Response("{}", { status: 200 });
+}) as typeof fetch;
+assert.equal((await notifyTeamSafe("preview booking")).ok, true);
+assert.equal((await notifyTeamImageSafe("https://example.com/face.jpg")).ok, true);
+assert.equal(previewTextTo, process.env.LINE_BOOKING_GROUP_ID);
+assert.equal(previewImageTo, process.env.LINE_BOOKING_GROUP_ID);
+delete process.env.VERCEL_ENV;
 
 // The retry key is supplied by the durable outbox row and must be transmitted
 // unchanged. LINE 409 for that key means the prior request was accepted.

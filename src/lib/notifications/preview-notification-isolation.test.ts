@@ -21,8 +21,9 @@ assert.match(migration, /confirm_slip_payment_scoped[\s\S]*set_config\('app\.not
 assert.match(migration, /approve_manual_review_payment_scoped[\s\S]*set_config\('app\.notification_scope'/);
 assert.match(migration, /transition_slot_booking_scoped[\s\S]*set_config\('app\.notification_scope'/);
 assert.match(env, /VERCEL_ENV === "production" \? "production" : "preview"/);
-assert.match(line, /VERCEL_ENV === "preview"[\s\S]*team notify skipped in preview/);
-assert.match(line, /VERCEL_ENV === "preview"[\s\S]*image notify skipped in preview/);
+assert.doesNotMatch(line, /team notify skipped in preview|image notify skipped in preview/);
+assert.match(line, /LINE_CHANNEL_ACCESS_TOKEN/);
+assert.match(line, /validateLineGroupId\(process\.env\.LINE_BOOKING_GROUP_ID\)/);
 assert.match(confirm, /rpc\("confirm_slip_payment_scoped"/);
 assert.match(confirm, /p_delivery_scope: notificationDeliveryScope\(\)/);
 assert.match(actions, /rpc\("transition_slot_booking_scoped"/);

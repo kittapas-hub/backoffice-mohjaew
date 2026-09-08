@@ -107,10 +107,10 @@ export async function pushImageMessage(
 export async function notifyTeamSafe(
   text: string,
 ): Promise<{ ok: boolean; skipped?: boolean; status?: number }> {
-  if (process.env.VERCEL_ENV === "preview") {
-    console.info("[line] team notify skipped in preview");
-    return { ok: false, skipped: true };
-  }
+  // Preview is opt-in by environment configuration, not hard-blocked in code.
+  // LINE_CHANNEL_ACCESS_TOKEN is Production-only by default; explicitly
+  // scoping it to Preview enables UAT booking notifications while durable
+  // outbox rows remain isolated by delivery_scope.
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   const groupId = validateLineGroupId(process.env.LINE_BOOKING_GROUP_ID);
   if (!token || !groupId) {
@@ -140,10 +140,7 @@ export async function notifyTeamSafe(
 export async function notifyTeamImageSafe(
   imageUrl: string,
 ): Promise<{ ok: boolean; skipped?: boolean }> {
-  if (process.env.VERCEL_ENV === "preview") {
-    console.info("[line] image notify skipped in preview");
-    return { ok: false, skipped: true };
-  }
+  // Same explicit Preview opt-in as notifyTeamSafe above.
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   const groupId = validateLineGroupId(process.env.LINE_BOOKING_GROUP_ID);
   if (!token || !groupId) return { ok: false, skipped: true };
