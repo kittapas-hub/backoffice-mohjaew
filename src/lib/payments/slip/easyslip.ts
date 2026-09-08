@@ -208,7 +208,28 @@ export function easySlipProvider(opts: {
       if (body === null) {
         return { ok: false, reason: "malformed_response", retryable: false };
       }
-      return normalizeEasySlipBody(body);
+      const normalized = normalizeEasySlipBody(body);
+      if (process.env.VERCEL_ENV === "preview" && !normalized.ok && normalized.reason === "malformed_response") {
+        const root = obj(body);
+        const data = obj(root.data);
+        const raw = obj(data.rawSlip);
+        const amount = obj(raw.amount);
+        const local = obj(amount.local);
+        const matchedObj = obj(data.matchedAccount);
+        const matchedBank = obj(matchedObj.bank);
+        console.warn("[easyslip] malformed response shape", {
+          rootSuccess: root.success, rootMessageType: typeof root.message, dataKeys: Object.keys(data).sort(),
+          isDuplicateType: typeof data.isDuplicate, rawSlipKeys: Object.keys(raw).sort(),
+          txRefType: typeof raw.transRef, dateType: typeof raw.date, rawAmountType: typeof amount.amount,
+          rawAmountValue: typeof amount.amount === "number" ? amount.amount : null, localPresent: has(amount, "local"),
+          localAmountType: typeof local.amount, localCurrency: str(local.currency), countryCode: str(raw.countryCode),
+          matchedAccountPresent: has(data, "matchedAccount"), matchedAccountNull: data.matchedAccount === null,
+          matchedKeys: Object.keys(matchedObj).sort(), matchedBankCodePresent: Boolean(str(matchedBank.code) || str(matchedBank.shortCode)),
+          matchedBankNumberPresent: Boolean(str(matchedObj.bankNumber)), matchedNamePresent: Boolean(str(matchedObj.nameTh) || str(matchedObj.nameEn)),
+          amountInSlipPresent: has(data, "amountInSlip"), amountInSlipType: typeof data.amountInSlip,
+        });
+      }
+      return normalized;
     },
   };
 }
