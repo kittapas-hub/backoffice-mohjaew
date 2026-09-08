@@ -330,7 +330,11 @@ export async function POST(
   if (!provider) {
     return fail(503, { error: "not_configured", message: `ระบบตรวจสลิปอัตโนมัติยังไม่พร้อมใช้งาน ${CONTACT_TEAM}` });
   }
-  const verified = await provider.verify({ image, mimeType: imgCheck.meta.type });
+  const verified = await provider.verify({
+    image,
+    mimeType: imgCheck.meta.type,
+    expectedAmountSatang: order.amount_satang,
+  });
 
   if (!verified.ok) {
     const audit: Record<string, SlipRejectionOutcome> = {

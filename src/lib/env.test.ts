@@ -133,4 +133,27 @@ const STALE_GROUP_ID = "C" + "2".repeat(32);
   }
 }
 
+{
+  const previous = {
+    msisdn: process.env.BOOKING_PROMPTPAY_MSISDN,
+    natId: process.env.BOOKING_PROMPTPAY_NAT_ID,
+    eWalletId: process.env.BOOKING_PROMPTPAY_EWALLET_ID,
+  };
+  const { promptPayQrTarget } = await import("./env.ts");
+  try {
+    delete process.env.BOOKING_PROMPTPAY_MSISDN;
+    delete process.env.BOOKING_PROMPTPAY_NAT_ID;
+    process.env.BOOKING_PROMPTPAY_EWALLET_ID = "123456789012345";
+    assert.deepEqual(promptPayQrTarget(), { kind: "eWalletId", value: "123456789012345" });
+    process.env.BOOKING_PROMPTPAY_MSISDN = "0800000000";
+    assert.equal(promptPayQrTarget(), null, "multiple PromptPay targets must fail closed");
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      const envKey = key === "natId" ? "BOOKING_PROMPTPAY_NAT_ID"
+        : key === "msisdn" ? "BOOKING_PROMPTPAY_MSISDN" : "BOOKING_PROMPTPAY_EWALLET_ID";
+      if (value === undefined) delete process.env[envKey]; else process.env[envKey] = value;
+    }
+  }
+}
+
 console.log("env self-check passed");

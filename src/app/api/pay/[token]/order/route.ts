@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { paymentAmountSatang, slipVerificationConfig } from "@/lib/env";
+import { paymentAmountSatang, promptPayQrTarget, slipVerificationConfig } from "@/lib/env";
 import { createSlipPaymentOrder } from "@/lib/payments/payment-orders";
+import { generateEasySlipPromptPayQr } from "@/lib/payments/easyslip-qr";
 
 export const runtime = "nodejs";
 
@@ -17,16 +18,30 @@ export async function POST(
 
   const cfg = slipVerificationConfig();
   const amountSatang = paymentAmountSatang();
+  const qrTarget = promptPayQrTarget();
   const secret = process.env.PAYMENT_ORDER_IDEMPOTENCY_SECRET ?? "";
   if (!cfg.enabled || !cfg.easySlipApiKey || !cfg.receiverProfile || cfg.receiverAccounts.length === 0 ||
-      cfg.receiverNames.length === 0 || amountSatang === null || !secret) {
+      cfg.receiverNames.length === 0 || amountSatang === null || !qrTarget || !secret) {
     return NextResponse.json({ error: "not_configured" }, { status: 503 });
   }
 
   const order = await createSlipPaymentOrder(token, amountSatang, cfg.receiverProfile, secret);
   if (!order) return NextResponse.json({ error: "order_unavailable" }, { status: 409 });
 
-  // The checkout token is a fresh database-generated capability; never return
-  // booking/order IDs or the deterministic idempotency key to the browser.
-  return NextResponse.json({ checkoutToken: order.checkout_token });
+  const qr = await generateEasySlipPromptPayQr({
+    apiKey: cfg.easySlipApiKey,
+    amountSatang: order.amount_satang,
+    target: qrTarget,
+  });
+  if (!qr) {
+    console.error("[payment-order] EasySlip dynamic QR generation failed");
+    return NextResponse.json({ error: "qr_unavailable" }, { status: 503 });
+  }
+
+  // The QR image is safe to reveal only after the durable order exists. The
+  // underlying PromptPay identifier and provider API key never leave the server.
+  return NextResponse.json(
+    { checkoutToken: order.checkout_token, qrDataUrl: qr.dataUrl },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

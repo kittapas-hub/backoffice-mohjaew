@@ -219,12 +219,17 @@ const provider = easySlipProvider({
     return new Response(JSON.stringify(SUCCESS), { status: 200 });
   },
 });
-const verified = await provider.verify({ image: Buffer.from([1, 2, 3]), mimeType: "image/png" });
+const verified = await provider.verify({
+  image: Buffer.from([1, 2, 3]),
+  mimeType: "image/png",
+  expectedAmountSatang: 99900,
+});
 assert.ok(verified.ok);
 assert.match(call!.url, /^https:\/\/api\.easyslip\.com\/v2\/verify\/bank$/);
 const sentForm = call!.init.body as FormData;
 assert.equal(sentForm.has("image"), true);
 assert.equal(sentForm.get("matchAccount"), "true");
+assert.equal(sentForm.get("matchAmount"), "999");
 assert.equal(sentForm.get("checkDuplicate"), "true");
 assert.equal((call!.init.headers as Record<string, string>).Authorization, "Bearer test");
 console.log("easyslip self-check passed");

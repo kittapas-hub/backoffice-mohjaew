@@ -180,6 +180,9 @@ export function easySlipProvider(opts: {
         "slip",
       );
       form.append("matchAccount", "true");
+      if (Number.isSafeInteger(input.expectedAmountSatang) && input.expectedAmountSatang! > 0) {
+        form.append("matchAmount", String(input.expectedAmountSatang! / 100));
+      }
       form.append("checkDuplicate", "true");
 
       let res: Response;

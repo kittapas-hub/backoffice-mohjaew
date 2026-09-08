@@ -51,6 +51,7 @@ export function BookingStatusPanel(props: {
   // so a locally-computed expiry can never mask or fight a server transition.
   const [holdExpired, setHoldExpired] = useState(props.initialHoldExpired);
   const [checkoutToken, setCheckoutToken] = useState<string | null>(null);
+  const [dynamicQrSrc, setDynamicQrSrc] = useState<string | null>(null);
   const [orderInitState, setOrderInitState] = useState<OrderInitState>("idle");
   const [orderInitAttempt, setOrderInitAttempt] = useState(0);
 
@@ -95,16 +96,26 @@ export function BookingStatusPanel(props: {
           parsed && typeof parsed === "object"
             ? (parsed as { checkoutToken?: unknown }).checkoutToken
             : null;
-        if (!res.ok || typeof token !== "string" || token.length === 0) {
+        const qrDataUrl =
+          parsed && typeof parsed === "object"
+            ? (parsed as { qrDataUrl?: unknown }).qrDataUrl
+            : null;
+        if (
+          !res.ok ||
+          typeof token !== "string" || token.length === 0 ||
+          typeof qrDataUrl !== "string" || !qrDataUrl.startsWith("data:image/png;base64,")
+        ) {
           throw new Error("order_unavailable");
         }
         if (!cancelled) {
           setCheckoutToken(token);
+          setDynamicQrSrc(qrDataUrl);
           setOrderInitState("ready");
         }
       } catch {
         if (!cancelled) {
           setCheckoutToken(null);
+          setDynamicQrSrc(null);
           setOrderInitState("error");
         }
       }
@@ -316,6 +327,10 @@ export function BookingStatusPanel(props: {
   }
 
   // ── pending_payment: calm summary + clear payment action ────────────────────
+  const resolvedQrSrc = props.slipOrderUrl
+    ? dynamicQrSrc
+    : props.hasQR ? props.qrSrc : null;
+
   return (
     <main className="checkout-page">
       <div className="checkout-shell checkout-shell-wide">
@@ -386,7 +401,7 @@ export function BookingStatusPanel(props: {
                   </Link>
                 </div>
               ) : props.hasPaymentConfig ? (
-                props.slipOrderUrl && (!checkoutToken || orderInitState !== "ready") ? (
+                props.slipOrderUrl && (!checkoutToken || !dynamicQrSrc || orderInitState !== "ready") ? (
                   orderInitState === "error" ? (
                     <div className="checkout-alert" data-tone="warn" role="alert">
                       <p className="checkout-alert-title">ยังเตรียมรายการชำระเงินไม่สำเร็จ</p>
@@ -416,15 +431,22 @@ export function BookingStatusPanel(props: {
                       โอนยอดเต็มจำนวน แล้วส่งสลิปพร้อมเลขอ้างอิงด้านล่าง
                     </p>
 
-                    {props.hasQR && (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={props.qrSrc}
-                        alt="QR Code สำหรับโอนเงิน"
-                        width={220}
-                        height={220}
-                        className="checkout-qr"
-                      />
+                    {resolvedQrSrc && (
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={resolvedQrSrc}
+                          alt="QR Code สำหรับโอนเงิน"
+                          width={220}
+                          height={220}
+                          className="checkout-qr"
+                        />
+                        {props.slipOrderUrl && (
+                          <p className="checkout-note checkout-note-center" style={{ marginTop: 8 }}>
+                            QR นี้สร้างจากยอดของรายการนี้โดยตรง กรุณาชำระตามยอดที่แสดง
+                          </p>
+                        )}
+                      </>
                     )}
 
                     <dl className="checkout-rows" style={{ marginBottom: 16 }}>

@@ -73,6 +73,23 @@ export function slipVerificationEnabled(): boolean {
   return slipVerificationConfig().enabled;
 }
 
+export type PromptPayQrTarget =
+  | { kind: "msisdn"; value: string }
+  | { kind: "natId"; value: string }
+  | { kind: "eWalletId"; value: string };
+
+/** Exactly one PromptPay target must be configured. Multiple/invalid values fail closed. */
+export function promptPayQrTarget(): PromptPayQrTarget | null {
+  const candidates: PromptPayQrTarget[] = [];
+  const msisdn = (process.env.BOOKING_PROMPTPAY_MSISDN ?? "").trim();
+  const natId = (process.env.BOOKING_PROMPTPAY_NAT_ID ?? "").trim();
+  const eWalletId = (process.env.BOOKING_PROMPTPAY_EWALLET_ID ?? "").trim();
+  if (/^0\d{9}$/.test(msisdn)) candidates.push({ kind: "msisdn", value: msisdn });
+  if (/^\d{13}$/.test(natId)) candidates.push({ kind: "natId", value: natId });
+  if (/^\d{15}$/.test(eWalletId)) candidates.push({ kind: "eWalletId", value: eWalletId });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 // Trusted booking price in satang, from BOOKING_PAYMENT_AMOUNT_THB.
 // Null when unset/invalid — payment orders are then not created and the
 // pre-Phase-1 manual flow is the only path.

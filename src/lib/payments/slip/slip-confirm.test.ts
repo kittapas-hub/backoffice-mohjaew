@@ -38,6 +38,9 @@ assert.doesNotMatch(successPage, /getOrCreateSlipPaymentOrder/, "GET/render must
 assert.match(successPage, /slipOrderUrl = `\/api\/pay\/\$\{token\}\/order`/);
 assert.match(successPage, /slipCfg\.enabled/);
 assert.match(orderRoute, /!cfg\.enabled/);
+assert.match(orderRoute, /generateEasySlipPromptPayQr/);
+assert.match(orderRoute, /qrDataUrl: qr\.dataUrl/);
+assert.match(route, /expectedAmountSatang: order\.amount_satang/);
 assert.match(route, /receiverProfile: receiverMatches/);
 assert.match(route, /!cfg\.enabled/);
 assert.match(confirm, /p_currency: opts\.slip\.currency/);

@@ -263,13 +263,18 @@ assert.match(
 );
 assert.match(
   panelSrc,
-  /fetch\(props\.slipOrderUrl![\s\S]*?method: "POST"[\s\S]*?setCheckoutToken\(token\)[\s\S]*?setOrderInitState\("ready"\)/,
+  /fetch\(props\.slipOrderUrl![\s\S]*?method: "POST"[\s\S]*?setCheckoutToken\(token\)[\s\S]*?setDynamicQrSrc\(qrDataUrl\)[\s\S]*?setOrderInitState\("ready"\)/,
   "booking success must create the payment order client-side before marking payment instructions ready",
 );
 assert.match(
   panelSrc,
-  /props\.slipOrderUrl && \(!checkoutToken \|\| orderInitState !== "ready"\)/,
-  "QR/account instructions must be gated until payment-order initialization succeeds",
+  /props\.slipOrderUrl && \(!checkoutToken \|\| !dynamicQrSrc \|\| orderInitState !== "ready"\)/,
+  "QR/account instructions must be gated until payment-order and dynamic QR initialization succeed",
+);
+assert.match(
+  panelSrc,
+  /qrDataUrl[\s\S]*?startsWith\("data:image\/png;base64,"\)/,
+  "dynamic payment QR must come from the server order-init response and be validated as PNG data",
 );
 assert.match(
   panelSrc,

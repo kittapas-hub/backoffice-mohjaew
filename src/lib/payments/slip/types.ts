@@ -6,6 +6,8 @@
 export type VerifiedUploadInput = {
   image: Buffer;
   mimeType: string;
+  /** Trusted order amount; sent to the provider as a secondary amount check. */
+  expectedAmountSatang?: number;
 };
 
 /** Normalized failure reasons. `retryable` on the result tells the UI whether

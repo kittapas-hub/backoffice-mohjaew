@@ -225,9 +225,9 @@ assert.doesNotMatch(expiredBlock, /qrSrc|accountNumber|CopyButton|LineCta/, "exp
 const notExpiredBlock = paymentSection.slice(
   paymentSection.indexOf(") : props.hasPaymentConfig"),
 );
-assert.match(notExpiredBlock, /props\.slipOrderUrl && \(!checkoutToken \|\| orderInitState !== "ready"\)/,
+assert.match(notExpiredBlock, /props\.slipOrderUrl && \(!checkoutToken \|\| !dynamicQrSrc \|\| orderInitState !== "ready"\)/,
   "automatic payment instructions must stay hidden until the order is ready");
-assert.match(notExpiredBlock, /props\.qrSrc/, "QR image must render after order initialization");
+assert.match(notExpiredBlock, /resolvedQrSrc/, "dynamic/fallback QR image must render only after order initialization");
 assert.match(notExpiredBlock, /props\.accountNumber/, "account number must render after order initialization");
 assert.match(notExpiredBlock, /props\.reference/, "reference must render after order initialization");
 assert.match(notExpiredBlock, /CopyButton/, "copy buttons must render after order initialization");
