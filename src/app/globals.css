@@ -1356,8 +1356,11 @@ body {
 
 .checkout-row-value {
   display: flex;
+  min-width: 0;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  overflow-wrap: anywhere;
   text-align: right;
   font-size: 14px;
   font-weight: 600;
@@ -1431,6 +1434,8 @@ body {
 /* QR */
 .checkout-qr {
   display: block;
+  max-width: 100%;
+  height: auto;
   margin: 0 auto 18px;
   border-radius: 14px;
   border: 1px solid #eadfdc;
