@@ -1,10 +1,8 @@
 // Central booking core. Every channel (website now; LINE/FB/IG later) creates
 // slot bookings through createSlotBooking — one capacity-safe path. The real
 // overbooking guard lives in the Postgres create_booking() function (row lock);
-// this layer validates input, maps errors, and fires the team notification.
+// this layer validates input and maps errors. Team notifications are emitted only after payment confirmation or when manual review is required.
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { APP_URL } from "@/lib/env";
-import { notifyTeamSafe } from "@/lib/line";
 import {
   filterCustomerAvailableSlots,
 } from "@/lib/slot-seeding";
@@ -119,35 +117,8 @@ export async function createSlotBooking(
     status: booking.status,
   });
 
-  // Initial booking notification is text-only. The face photo stays stored
-  // with the booking and is sent together with the payment slip after a
-  // successful payment confirmation, avoiding a duplicate face image in LINE.
-  await sendTeamNotify(booking);
-
   return { ok: true, booking };
 }
-
-async function sendTeamNotify(b: CreatedBooking) {
-  const base = APP_URL || "";
-  const link = base ? `${base}/admin/bookings/${b.id}` : `/admin/bookings/${b.id}`;
-  const topic = b.consultation_topic?.trim();
-  const lines = [
-    "📥 คำขอจองคิวใหม่ (เว็บ/ช่องทางออนไลน์)",
-    "",
-    `วันรอบ/เวลา: ${b.preferred_time}`,
-    `ลำดับคิว: ${b.queue_number}`,
-    `ชื่อ: ${b.nickname}`,
-    `โทร: ${b.phone}`,
-  ];
-  if (topic && topic !== "ไม่ได้ระบุหัวข้อพิเศษ") lines.push(`เรื่องที่สนใจ: ${topic}`);
-  lines.push(
-    `ช่องทาง: ${b.source}`,
-    `สถานะ: รอชำระเงิน (hold ${paymentHoldMinutes(process.env.BOOKING_HOLD_MINUTES)} นาที)`,
-    `Backoffice: ${link}`,
-  );
-  await notifyTeamSafe(lines.join("\n"));
-}
-
 
 export type BookingTokenData = {
   reference: string;       // first 8 chars of id, uppercase (display only)

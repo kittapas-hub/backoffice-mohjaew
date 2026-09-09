@@ -436,15 +436,11 @@ assert.match(
 // linkFaceToBooking was removed in P0 hardening (logic moved into RPC + inline).
 assert.doesNotMatch(coreSrc, /linkFaceToBooking/, "booking-core must not export linkFaceToBooking");
 
-// Initial booking notification must be text-only. The face photo is sent later
-// with the confirmed-payment notification so LINE never receives it twice.
-assert.doesNotMatch(coreSrc, /notifyTeamImageSafe/, "booking-core must not push the face image before payment");
-assert.match(coreSrc, /await sendTeamNotify\(booking\)/, "booking-core must still notify the team about the pending booking");
-
-// ไม่ส่งวันเกิดเข้า group — birthDateText must not appear in the group text body.
-const notifyFnStart = coreSrc.indexOf("async function sendTeamNotify");
-const notifyFnBody = coreSrc.slice(notifyFnStart, coreSrc.indexOf("\nexport ", notifyFnStart + 1));
-assert.doesNotMatch(notifyFnBody, /birthDateText/, "sendTeamNotify must not include birthDateText in group message");
+// Pending-payment bookings stay silent in LINE. Team notifications are emitted
+// only after payment confirmation or for actionable exception/manual-review states.
+assert.doesNotMatch(coreSrc, /sendTeamNotify/, "booking-core must not send a pending-booking LINE notification");
+assert.doesNotMatch(coreSrc, /notifyTeamSafe/, "booking-core must not push LINE messages before payment confirmation");
+assert.doesNotMatch(coreSrc, /notifyTeamImageSafe/, "booking-core must not push images before payment confirmation");
 
 // 0003 migration must define booking_face_uploads and the face token error codes.
 const migration3 = read("../supabase/migrations/0003_face_upload.sql");
