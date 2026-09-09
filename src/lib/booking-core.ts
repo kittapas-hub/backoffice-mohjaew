@@ -4,7 +4,7 @@
 // this layer validates input, maps errors, and fires the team notification.
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { APP_URL } from "@/lib/env";
-import { notifyTeamSafe, notifyTeamImageSafe } from "@/lib/line";
+import { notifyTeamSafe } from "@/lib/line";
 import {
   filterCustomerAvailableSlots,
 } from "@/lib/slot-seeding";
@@ -119,59 +119,33 @@ export async function createSlotBooking(
     status: booking.status,
   });
 
-  // Face was claimed atomically in the RPC. Fetch its storage path from
-  // booking_images and create a 24-hour signed URL for the LINE image message.
-  // Non-fatal: a null here means LINE gets text-only; admin can still view.
-  let faceSignedUrl: string | null = null;
-  if (opts.faceUploadToken) {
-    const { data: imgRow } = await db
-      .from("booking_images")
-      .select("storage_path")
-      .eq("booking_id", booking.id)
-      .maybeSingle();
-    if (imgRow) {
-      const { data: signed } = await db.storage
-        .from("booking-faces")
-        .createSignedUrl(imgRow.storage_path, 86_400); // 24 h
-      faceSignedUrl = signed?.signedUrl ?? null;
-    }
-  }
-
-  // Fire-and-await team notify (non-fatal — must never block the booking).
-  await sendTeamNotify(booking, faceSignedUrl);
+  // Initial booking notification is text-only. The face photo stays stored
+  // with the booking and is sent together with the payment slip after a
+  // successful payment confirmation, avoiding a duplicate face image in LINE.
+  await sendTeamNotify(booking);
 
   return { ok: true, booking };
 }
 
-async function sendTeamNotify(b: CreatedBooking, faceSignedUrl: string | null) {
+async function sendTeamNotify(b: CreatedBooking) {
   const base = APP_URL || "";
   const link = base ? `${base}/admin/bookings/${b.id}` : `/admin/bookings/${b.id}`;
-  const text = [
+  const topic = b.consultation_topic?.trim();
+  const lines = [
     "📥 คำขอจองคิวใหม่ (เว็บ/ช่องทางออนไลน์)",
     "",
     `วันรอบ/เวลา: ${b.preferred_time}`,
     `ลำดับคิว: ${b.queue_number}`,
     `ชื่อ: ${b.nickname}`,
     `โทร: ${b.phone}`,
-    `หัวข้อ: ${b.consultation_topic}`,
+  ];
+  if (topic && topic !== "ไม่ได้ระบุหัวข้อพิเศษ") lines.push(`เรื่องที่สนใจ: ${topic}`);
+  lines.push(
     `ช่องทาง: ${b.source}`,
-    faceSignedUrl ? "📷 รูปหน้า: แนบมาแล้ว (รูปส่งต่อด้านล่าง)" : "📷 รูปหน้า: ไม่มี",
     `สถานะ: รอชำระเงิน (hold ${paymentHoldMinutes(process.env.BOOKING_HOLD_MINUTES)} นาที)`,
     `Backoffice: ${link}`,
-  ].join("\n");
-  const textResult = await notifyTeamSafe(text);
-  if (textResult.skipped || !faceSignedUrl) return;
-
-  const imgResult = await notifyTeamImageSafe(faceSignedUrl);
-  if (!imgResult.ok) {
-    console.error(
-      "[booking] LINE image notify failed for booking",
-      b.id.slice(0, 8).toUpperCase(),
-    );
-    await notifyTeamSafe(
-      `⚠️ ไม่สามารถส่งรูปหน้าอัตโนมัติ โปรดเปิดดูรูปจาก Backoffice: ${link}`,
-    );
-  }
+  );
+  await notifyTeamSafe(lines.join("\n"));
 }
 
 

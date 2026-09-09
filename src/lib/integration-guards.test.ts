@@ -436,9 +436,10 @@ assert.match(
 // linkFaceToBooking was removed in P0 hardening (logic moved into RPC + inline).
 assert.doesNotMatch(coreSrc, /linkFaceToBooking/, "booking-core must not export linkFaceToBooking");
 
-// LINE image notify is non-fatal: failure is caught and booking is never blocked.
-assert.match(coreSrc, /notifyTeamImageSafe/, "booking-core must call notifyTeamImageSafe");
-assert.match(coreSrc, /imgResult\.ok/, "booking-core must handle image notify failure non-fatally");
+// Initial booking notification must be text-only. The face photo is sent later
+// with the confirmed-payment notification so LINE never receives it twice.
+assert.doesNotMatch(coreSrc, /notifyTeamImageSafe/, "booking-core must not push the face image before payment");
+assert.match(coreSrc, /await sendTeamNotify\(booking\)/, "booking-core must still notify the team about the pending booking");
 
 // ไม่ส่งวันเกิดเข้า group — birthDateText must not appear in the group text body.
 const notifyFnStart = coreSrc.indexOf("async function sendTeamNotify");
