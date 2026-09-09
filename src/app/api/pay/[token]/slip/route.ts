@@ -39,6 +39,7 @@ import {
   type SlipRejectionOutcome,
 } from "@/lib/payments/slip/confirm";
 import type { SlipVerificationProvider } from "@/lib/payments/slip/types";
+import { deliverPreviewBookingConfirmed } from "@/lib/notifications/preview-confirmed-delivery";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -450,6 +451,11 @@ export async function POST(
   switch (confirmed.result) {
     case "ok":
     case "already_paid":
+      try {
+        await deliverPreviewBookingConfirmed(order.booking_id);
+      } catch {
+        console.error("preview_notification_delivery_failed");
+      }
       return NextResponse.json({ status: "confirmed" });
     case "rejected":
       if (confirmed.reason === "duplicate_tx") {

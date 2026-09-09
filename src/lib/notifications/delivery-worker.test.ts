@@ -201,19 +201,19 @@ function makeConfirmedRow(
 // ===========================================================================
 {
   const text = renderBookingConfirmedMessage(makeConfirmedRow("xyz", { confirmationMethod: "easyslip_auto" }));
+  assert.equal(text.split("\n")[0], "🔮 คิวที่ 3");
   assert.match(text, /ABCD1234/);
   assert.match(text, /สมชาย/);
   assert.match(text, /1990-01-01/);
   assert.match(text, /การงาน/);
   assert.match(text, /0812345678/);
-  assert.match(text, /2026-07-20/);
-  assert.match(text, /09:00–12:00/);
-  assert.match(text, /3/);
-  assert.match(text, /easyslip_auto/);
-  assert.match(text, /2026-07-14T10:00:00Z/);
-  assert.equal(text.split("\n")[0], "ได้รับชำระเงินและยืนยันการจองแล้ว");
-  assert.match(text, /ยอดที่ต้องชำระ: 999 บาท/);
-  assert.match(text, /ยอดที่ได้รับ: 999 บาท/);
+  assert.match(text, /วันจันทร์ที่ 20 กรกฎาคม 2569/);
+  assert.match(text, /รอบ 09:00–12:00/);
+  assert.match(text, /สถานะ: ✅ ชำระเงินแล้ว/);
+  assert.match(text, /ยอด: 999 บาท/);
+  assert.match(text, /📷 รูปผู้จอง/);
+  assert.match(text, /🧾 สลิปชำระเงิน/);
+  assert.doesNotMatch(text, /easyslip_auto|2026-07-14T10:00:00Z/);
 }
 
 // Provider-verified manual-review approval: distinct wording, still shows
@@ -222,9 +222,10 @@ function makeConfirmedRow(
   const text = renderBookingConfirmedMessage(
     makeConfirmedRow("manual", { confirmationMethod: "manual_review_approved" }),
   );
-  assert.equal(text.split("\n")[0], "ตรวจสอบการชำระเงินและยืนยันการจองแล้ว");
-  assert.match(text, /ยอดที่ต้องชำระ: 999 บาท/);
-  assert.match(text, /ยอดที่ได้รับ: 999 บาท/);
+  assert.equal(text.split("\n")[0], "🔮 คิวที่ 3");
+  assert.match(text, /สถานะ: ✅ ชำระเงินแล้ว/);
+  assert.match(text, /ยอด: 999 บาท/);
+  assert.match(text, /🧾 สลิปชำระเงิน/);
 }
 
 // Admin override without verified payment: must never claim a payment was
@@ -233,9 +234,11 @@ function makeConfirmedRow(
   const text = renderBookingConfirmedMessage(
     makeConfirmedRow("override", { confirmationMethod: "admin_override", amounts: false }),
   );
-  assert.equal(text.split("\n")[0], "ทีมงานยืนยันการจองแล้ว");
-  assert.doesNotMatch(text, /ได้รับชำระเงิน/, "admin override must never claim payment was received");
-  assert.doesNotMatch(text, /ยอดที่ต้องชำระ|ยอดที่ได้รับ/, "admin override has no payment order and must never show an amount");
+  assert.equal(text.split("\n")[0], "🔮 คิวที่ 3");
+  assert.match(text, /สถานะ: ✅ ยืนยันคิวแล้ว/);
+  assert.doesNotMatch(text, /ชำระเงินแล้ว/, "admin override must never claim payment was received");
+  assert.doesNotMatch(text, /ยอด:/, "admin override has no payment order and must never show an amount");
+  assert.doesNotMatch(text, /🧾 สลิปชำระเงิน/, "admin override has no verified slip");
 }
 
 // An unrecognized/absent confirmation_method falls back to the generic
@@ -244,7 +247,8 @@ function makeConfirmedRow(
   const row = makeConfirmedRow("unknown", { amounts: false });
   row.payload = { ...row.payload, confirmation_method: "something_else" };
   const text = renderBookingConfirmedMessage(row);
-  assert.equal(text.split("\n")[0], "ยืนยันการจองคิวแล้ว");
+  assert.equal(text.split("\n")[0], "🔮 คิวที่ 3");
+  assert.match(text, /สถานะ: ✅ ชำระเงินแล้ว/);
 }
 
 // renderBookingConfirmedMessage must fall back to "-" for absent fields
@@ -256,7 +260,7 @@ function makeConfirmedRow(
   const text = renderBookingConfirmedMessage(row);
   assert.doesNotMatch(text, /undefined/);
   assert.match(text, /เลขอ้างอิง: -/);
-  assert.doesNotMatch(text, /ยอดที่ต้องชำระ|ยอดที่ได้รับ|Backoffice/);
+  assert.doesNotMatch(text, /ยอด:|Backoffice/);
 }
 
 // ===========================================================================

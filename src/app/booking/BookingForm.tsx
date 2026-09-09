@@ -21,9 +21,23 @@ import {
   FACE_SOURCE_MAX_BYTES,
   FACE_UPLOAD_MAX_BYTES,
 } from "@/lib/client-image-compression";
+import {
+  calendarIsoToBirthDateInput,
+  normalizeBirthDateText,
+  parseBirthDateInput,
+} from "@/lib/birth-date";
 
 const FACE_ACCEPT = "image/jpeg,image/png,image/webp";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CONSULTATION_TOPIC_OPTIONS = [
+  "การเงิน",
+  "งาน/ธุรกิจ",
+  "ความรัก",
+  "ครอบครัว",
+  "การตัดสินใจ/โอกาส",
+  "อื่น ๆ",
+] as const;
+const TOPIC_SEPARATOR = " • ";
 
 type Slot = {
   id: string;
@@ -106,6 +120,7 @@ export default function BookingForm({
     consultationTopic: "",
     birthDateText: "",
   });
+  const [showBirthCalendar, setShowBirthCalendar] = useState(false);
   // Honeypot — kept empty by real users; hidden from view.
   const [company, setCompany] = useState("");
   const [faceFile, setFaceFile] = useState<File | null>(null);
@@ -218,6 +233,10 @@ export default function BookingForm({
   ).length;
   const currentStep = BOOKING_WIZARD_STEPS[step - 1];
   const amount = formatAmount(payment.amountSatang);
+  const parsedBirthDate = parseBirthDateInput(form.birthDateText);
+  const selectedTopics = form.consultationTopic
+    ? form.consultationTopic.split(TOPIC_SEPARATOR).filter(Boolean)
+    : [];
 
   function advance() {
     if (!canContinueWizard(step, wizardState)) {
@@ -312,7 +331,14 @@ export default function BookingForm({
           "Content-Type": "application/json",
           "Idempotency-Key": idemKey.current,
         },
-        body: JSON.stringify({ slotId, source, company, faceUploadToken: token, ...form }),
+        body: JSON.stringify({
+          slotId,
+          source,
+          company,
+          faceUploadToken: token,
+          ...form,
+          birthDateText: normalizeBirthDateText(form.birthDateText),
+        }),
       });
       const parsed: unknown = await res.json();
       const data =
@@ -368,6 +394,13 @@ export default function BookingForm({
   function updateForm<K extends keyof BookingDetails>(field: K, value: BookingDetails[K]) {
     setForm((current) => ({ ...current, [field]: value }));
     setError(null);
+  }
+
+  function toggleConsultationTopic(topic: string) {
+    const next = selectedTopics.includes(topic)
+      ? selectedTopics.filter((item) => item !== topic)
+      : [...selectedTopics, topic];
+    updateForm("consultationTopic", next.join(TOPIC_SEPARATOR));
   }
 
   function renderStep() {
@@ -491,29 +524,69 @@ export default function BookingForm({
                   className="booking-input"
                 />
               </label>
-              <label className="booking-field">
-                <span className="booking-label">วัน/เดือน/ปีเกิด</span>
-                <input
-                  required
-                  name="birthDateText"
-                  value={form.birthDateText}
-                  onChange={(e) => updateForm("birthDateText", e.target.value)}
-                  placeholder="เช่น 1 มกราคม 2540"
-                  className="booking-input"
-                />
-              </label>
-              <label className="booking-field booking-field-wide">
-                <span className="booking-label">หัวข้อที่ต้องการปรึกษาพิเศษ</span>
-                <span className="booking-help">(ระบุหรือไม่ก็ได้)</span>
-                <textarea
-                  name="consultationTopic"
-                  rows={4}
-                  value={form.consultationTopic}
-                  onChange={(e) => updateForm("consultationTopic", e.target.value)}
-                  placeholder="ถ้ามีเรื่องที่อยากให้เน้นเป็นพิเศษ พิมพ์ไว้ตรงนี้ได้"
-                  className="booking-textarea"
-                />
-              </label>
+              <div className="booking-field">
+                <label className="booking-label" htmlFor="booking-birth-date">วัน/เดือน/ปีเกิด</label>
+                <div className="booking-birth-input-row">
+                  <input
+                    id="booking-birth-date"
+                    required
+                    name="birthDateText"
+                    value={form.birthDateText}
+                    onChange={(e) => updateForm("birthDateText", e.target.value)}
+                    placeholder="เช่น 11/12/2523"
+                    className="booking-input"
+                    aria-describedby="booking-birth-date-help"
+                  />
+                  <button
+                    type="button"
+                    className="booking-calendar-toggle"
+                    aria-expanded={showBirthCalendar}
+                    onClick={() => setShowBirthCalendar((open) => !open)}
+                  >
+                    📅 ปฏิทิน
+                  </button>
+                </div>
+                <span id="booking-birth-date-help" className="booking-help">
+                  กรอกได้ เช่น 11/12/2523 หรือ 11 ธ.ค. 23
+                </span>
+                {parsedBirthDate && (
+                  <span className="booking-birth-preview">✓ {parsedBirthDate.display}</span>
+                )}
+                {showBirthCalendar && (
+                  <input
+                    type="date"
+                    max={todayISO()}
+                    value={parsedBirthDate?.iso ?? ""}
+                    onChange={(e) => {
+                      const next = calendarIsoToBirthDateInput(e.target.value);
+                      if (next) updateForm("birthDateText", next);
+                    }}
+                    className="booking-input booking-birth-calendar"
+                    aria-label="เลือกวันเกิดจากปฏิทิน"
+                  />
+                )}
+              </div>
+              <fieldset className="booking-field booking-field-wide booking-topic-field">
+                <legend className="booking-label">สนใจปรึกษาเรื่องไหน</legend>
+                <span className="booking-help">เลือกได้หลายข้อ หรือข้ามได้ ข้อมูลนี้ช่วยจัดหมวดหมู่เพื่อสื่อสารให้ตรงความสนใจมากขึ้น</span>
+                <div className="booking-topic-grid" aria-label="หัวข้อที่สนใจ">
+                  {CONSULTATION_TOPIC_OPTIONS.map((topic) => {
+                    const selected = selectedTopics.includes(topic);
+                    return (
+                      <button
+                        type="button"
+                        key={topic}
+                        aria-pressed={selected}
+                        data-selected={selected ? "true" : undefined}
+                        onClick={() => toggleConsultationTopic(topic)}
+                        className="booking-topic-chip"
+                      >
+                        {selected ? "✓ " : ""}{topic}
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
             </div>
           </section>
         );
@@ -585,8 +658,10 @@ export default function BookingForm({
                 <ReviewRow label="รอบเซสชัน" value={selectedSlot?.label ?? "-"} />
                 <ReviewRow label="ชื่อเล่น" value={form.nickname || "-"} />
                 <ReviewRow label="เบอร์โทรศัพท์" value={form.phone || "-"} />
-                <ReviewRow label="วัน/เดือน/ปีเกิด" value={form.birthDateText || "-"} />
-                <ReviewRow label="หัวข้อที่ต้องการปรึกษาพิเศษ" value={form.consultationTopic || "-"} />
+                <ReviewRow label="วัน/เดือน/ปีเกิด" value={(parsedBirthDate?.display ?? form.birthDateText) || "-"} />
+                {form.consultationTopic && (
+                  <ReviewRow label="เรื่องที่สนใจ" value={form.consultationTopic} />
+                )}
               </dl>
             </div>
           </section>
@@ -608,8 +683,10 @@ export default function BookingForm({
                 <ReviewRow label="รอบเซสชัน" value={selectedSlot?.label ?? "-"} />
                 <ReviewRow label="ชื่อเล่น" value={form.nickname || "-"} />
                 <ReviewRow label="เบอร์โทรศัพท์" value={form.phone || "-"} />
-                <ReviewRow label="วัน/เดือน/ปีเกิด" value={form.birthDateText || "-"} />
-                <ReviewRow label="หัวข้อที่ต้องการปรึกษาพิเศษ" value={form.consultationTopic || "-"} />
+                <ReviewRow label="วัน/เดือน/ปีเกิด" value={(parsedBirthDate?.display ?? form.birthDateText) || "-"} />
+                {form.consultationTopic && (
+                  <ReviewRow label="เรื่องที่สนใจ" value={form.consultationTopic} />
+                )}
                 <ReviewRow label="รูปหน้าตรง" value={faceFile ? "แนบแล้ว" : "ยังไม่ได้แนบ"} />
               </dl>
             </div>

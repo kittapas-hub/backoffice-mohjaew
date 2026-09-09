@@ -94,15 +94,6 @@ function backofficeUrl(payload: Record<string, unknown> | null, appUrl: string |
   return `${appUrl.replace(/\/+$/, "")}/admin/bookings/${bookingId}`;
 }
 
-// Combined wording depends on how payment was established for this
-// confirmation — never claim a payment was received on the admin-override
-// path, which has no verified payment at all.
-const CONFIRMED_HEADLINE: Record<string, string> = {
-  easyslip_auto: "ได้รับชำระเงินและยืนยันการจองแล้ว",
-  manual_review_approved: "ตรวจสอบการชำระเงินและยืนยันการจองแล้ว",
-  admin_override: "ทีมงานยืนยันการจองแล้ว",
-};
-
 // Renders strictly from the fields the transition_slot_booking /
 // confirm_slip_payment / approve_manual_review_payment 'confirmed' paths
 // actually write (0012_booking_confirmed_notification.sql) — no invented
@@ -111,25 +102,63 @@ const CONFIRMED_HEADLINE: Record<string, string> = {
 // payment_received row (see the migration's 2026-07-20 hardening note).
 // Image attachment (face/slip) is not part of this text at all — see
 // runImageDeliveryWorker below (0013_payment_slip_notification_image.sql).
+function thaiBookingDate(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(`${value}T00:00:00+07:00`);
+  if (!Number.isFinite(date.getTime())) return value;
+  return new Intl.DateTimeFormat("th-TH", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Asia/Bangkok",
+  }).format(date);
+}
+
+function optionalTopic(payload: Record<string, unknown> | null): string | null {
+  const value = payload?.consultation_topic;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "ไม่ได้ระบุหัวข้อพิเศษ") return null;
+  return trimmed;
+}
+
 export function renderBookingConfirmedMessage(row: ClaimedRow, appUrl?: string): string {
   const p = row.payload;
   const method = field(p, "confirmation_method");
-  const lines = [
-    CONFIRMED_HEADLINE[method] ?? "ยืนยันการจองคิวแล้ว",
-    `เลขอ้างอิง: ${field(p, "reference_code")}`,
-    `ชื่อ: ${field(p, "customer_name")}`,
-    `วันเกิด: ${field(p, "birth_date")}`,
-    `หัวข้อ: ${field(p, "consultation_topic")}`,
-    `โทร: ${field(p, "phone")}`,
-    `วันที่จอง: ${field(p, "booking_date")}`,
-    `เวลา: ${field(p, "session_time")}`,
-    `ลำดับคิว: ${field(p, "queue_number")}`,
-  ];
+  const queue = field(p, "queue_number");
+  const name = field(p, "customer_name");
+  const bookingDate = thaiBookingDate(field(p, "booking_date"));
+  const session = field(p, "session_time");
+  const birthDate = field(p, "birth_date");
+  const phone = field(p, "phone");
+  const reference = field(p, "reference_code");
+  const topic = optionalTopic(p);
   const expected = moneyField(p, "expected_amount_satang");
   const received = moneyField(p, "received_amount_satang");
-  if (expected) lines.push(`ยอดที่ต้องชำระ: ${expected}`);
-  if (received) lines.push(`ยอดที่ได้รับ: ${received}`);
-  lines.push(`ยืนยันโดย: ${method}`, `อัปเดตล่าสุด: ${field(p, "updated_at")}`);
+  const paidAmount = received ?? expected;
+
+  const lines = [
+    `🔮 คิวที่ ${queue}`,
+    name,
+    "",
+    bookingDate,
+    `รอบ ${session}`,
+    "",
+    `วันเกิด: ${birthDate}`,
+    `โทร: ${phone}`,
+  ];
+  if (topic) lines.push(`เรื่องที่สนใจ: ${topic}`);
+  lines.push(
+    "",
+    method === "admin_override" ? "สถานะ: ✅ ยืนยันคิวแล้ว" : "สถานะ: ✅ ชำระเงินแล้ว",
+  );
+  if (paidAmount) lines.push(`ยอด: ${paidAmount}`);
+  lines.push(`เลขอ้างอิง: ${reference}`, "", "━━━━━━━━━━━━", "📷 รูปผู้จอง", "(รูปส่งต่อด้านล่าง)");
+  if (method !== "admin_override") {
+    lines.push("", "━━━━━━━━━━━━", "🧾 สลิปชำระเงิน", "(สลิปส่งต่อด้านล่าง)");
+  }
+  lines.push("━━━━━━━━━━━━");
   const url = backofficeUrl(p, appUrl);
   if (url) lines.push(`Backoffice: ${url}`);
   return lines.join("\n");

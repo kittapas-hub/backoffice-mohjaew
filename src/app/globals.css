@@ -516,6 +516,86 @@ body {
   gap: 16px;
 }
 
+.booking-birth-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.booking-calendar-toggle {
+  min-height: 48px;
+  border: 1px solid #d7c4bc;
+  border-radius: 12px;
+  background: #fff8f6;
+  color: var(--mj-primary);
+  padding: 0 14px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.booking-calendar-toggle:hover,
+.booking-calendar-toggle:focus-visible {
+  border-color: var(--mj-primary);
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(190, 52, 85, 0.13);
+}
+
+.booking-birth-calendar {
+  max-width: 320px;
+}
+
+.booking-birth-preview {
+  color: #217a4b;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.booking-topic-field {
+  min-inline-size: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.booking-topic-field legend {
+  padding: 0;
+}
+
+.booking-topic-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.booking-topic-chip {
+  border: 1px solid #dfcfc9;
+  border-radius: 999px;
+  background: #fff;
+  color: #594a46;
+  padding: 9px 13px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.booking-topic-chip:hover,
+.booking-topic-chip:focus-visible {
+  border-color: var(--mj-primary);
+  outline: none;
+}
+
+.booking-topic-chip[data-selected="true"] {
+  border-color: var(--mj-primary);
+  background: #fff1ee;
+  color: var(--mj-primary);
+}
+
 .booking-alert {
   margin: 0;
   border-radius: 13px;
