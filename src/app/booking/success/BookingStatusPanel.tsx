@@ -52,6 +52,7 @@ export function BookingStatusPanel(props: {
   const [holdExpired, setHoldExpired] = useState(props.initialHoldExpired);
   const [checkoutToken, setCheckoutToken] = useState<string | null>(null);
   const [dynamicQrSrc, setDynamicQrSrc] = useState<string | null>(null);
+  const [qrAmountLocked, setQrAmountLocked] = useState(false);
   const [orderInitState, setOrderInitState] = useState<OrderInitState>("idle");
   const [orderInitAttempt, setOrderInitAttempt] = useState(0);
 
@@ -100,22 +101,29 @@ export function BookingStatusPanel(props: {
           parsed && typeof parsed === "object"
             ? (parsed as { qrDataUrl?: unknown }).qrDataUrl
             : null;
+        const qrLocked =
+          parsed && typeof parsed === "object"
+            ? (parsed as { qrLocked?: unknown }).qrLocked
+            : false;
         if (
           !res.ok ||
           typeof token !== "string" || token.length === 0 ||
-          typeof qrDataUrl !== "string" || !qrDataUrl.startsWith("data:image/png;base64,")
+          typeof qrDataUrl !== "string" ||
+          !(qrDataUrl.startsWith("data:image/png;base64,") || qrDataUrl.startsWith("/"))
         ) {
           throw new Error("order_unavailable");
         }
         if (!cancelled) {
           setCheckoutToken(token);
           setDynamicQrSrc(qrDataUrl);
+          setQrAmountLocked(qrLocked === true);
           setOrderInitState("ready");
         }
       } catch {
         if (!cancelled) {
           setCheckoutToken(null);
           setDynamicQrSrc(null);
+          setQrAmountLocked(false);
           setOrderInitState("error");
         }
       }
@@ -441,7 +449,7 @@ export function BookingStatusPanel(props: {
                           height={220}
                           className="checkout-qr"
                         />
-                        {props.slipOrderUrl && (
+                        {props.slipOrderUrl && qrAmountLocked && (
                           <p className="checkout-note checkout-note-center" style={{ marginTop: 8 }}>
                             QR นี้สร้างจากยอดของรายการนี้โดยตรง กรุณาชำระตามยอดที่แสดง
                           </p>

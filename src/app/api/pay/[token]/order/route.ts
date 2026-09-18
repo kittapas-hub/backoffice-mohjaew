@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { paymentAmountSatang, promptPayQrTarget, slipVerificationConfig } from "@/lib/env";
+import { paymentAmountSatang, paymentConfig, promptPayQrTarget, slipVerificationConfig } from "@/lib/env";
 import { createSlipPaymentOrder } from "@/lib/payments/payment-orders";
 import { generateEasySlipPromptPayQr } from "@/lib/payments/easyslip-qr";
 
@@ -33,15 +33,19 @@ export async function POST(
     amountSatang: order.amount_satang,
     target: qrTarget,
   });
-  if (!qr) {
-    console.error("[payment-order] EasySlip dynamic QR generation failed");
+  const fallbackQrPath = paymentConfig().qrPath.trim();
+  const fallbackQrSrc = fallbackQrPath
+    ? (fallbackQrPath.startsWith("/") ? fallbackQrPath : `/${fallbackQrPath}`)
+    : null;
+
+  if (!qr && !fallbackQrSrc) {
+    console.error("[payment-order] EasySlip dynamic QR generation failed and no fallback QR is configured");
     return NextResponse.json({ error: "qr_unavailable" }, { status: 503 });
   }
+  if (!qr) console.warn("[payment-order] EasySlip dynamic QR generation failed; using configured static QR fallback");
 
-  // The QR image is safe to reveal only after the durable order exists. The
-  // underlying PromptPay identifier and provider API key never leave the server.
   return NextResponse.json(
-    { checkoutToken: order.checkout_token, qrDataUrl: qr.dataUrl },
+    { checkoutToken: order.checkout_token, qrDataUrl: qr?.dataUrl ?? fallbackQrSrc, qrLocked: Boolean(qr) },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

@@ -62,6 +62,11 @@ export async function generateEasySlipPromptPayQr(opts: {
     !payload ||
     payload.length > 512
   ) {
+    console.warn("[easyslip-qr] provider response rejected", {
+      httpStatus: response.status,
+      providerStatus: root.status ?? null,
+      message: typeof root.message === "string" ? root.message : null,
+    });
     return null;
   }
 
