@@ -3,12 +3,20 @@ import { replyToPostback, replyToTextMessage } from "@/lib/line-campaign";
 import { hashLineUatPairingCode } from "@/lib/line-uat-pairing";
 import { handleLineWebhookRequest } from "@/lib/line-webhook";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { enqueueChatEvent } from "@/lib/line-chat-server";
+import { dispatchChatJobs } from "@/lib/line-chat";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  const jobs: string[] = [];
   return handleLineWebhookRequest(req, {
+    async enqueueText(event) {
+      const id = await enqueueChatEvent(event);
+      if (id) jobs.push(id);
+    },
+    async afterEvents() { await dispatchChatJobs(jobs); },
     verifySignature: verifyLineSignature,
     async persistSelection({ lineUserId, campaign, segment, createdAt }) {
       const { error } = await supabaseAdmin().from("line_user_segments").upsert(

@@ -7,6 +7,7 @@ const items = [
   { href: "/admin", label: "การจอง", exact: true, icon: "▦" },
   { href: "/admin/day", label: "ตารางคิว", icon: "◫" },
   { href: "/admin/line", label: "LINE Marketing", icon: "◉" },
+  { href: "/admin/chat", label: "บทสนทนา LINE", icon: "◌" },
 ];
 
 export function AdminNav() {

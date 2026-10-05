@@ -12,6 +12,8 @@ export type LineWebhookDependencies = {
   reply: Reply;
   completePairing: CompletePairing;
   replyPairing: (replyToken: string) => Promise<unknown>;
+  enqueueText?: (event: unknown) => Promise<void>;
+  afterEvents?: () => Promise<void>;
 };
 
 type LineEvent = {
@@ -61,6 +63,10 @@ export async function handleLineWebhookRequest(request: Request, dependencies: L
       }
       continue;
     }
+    if (event?.type === "message" && event.message?.type === "text" && dependencies.enqueueText) {
+      try { await dependencies.enqueueText(candidate); }
+      catch { return Response.json({ error: "chat_persistence_failed" }, { status: 503 }); }
+    }
     const selection = event?.type === "postback" ? parseLinePostbackData(event.postback?.data) : null;
     if (!selection || !userId || !replyToken) continue;
 
@@ -82,6 +88,8 @@ export async function handleLineWebhookRequest(request: Request, dependencies: L
       // Intentionally acknowledged below.
     }
   }
+  // Text messages are already durable; n8n outages must not trigger duplicate processing.
+  try { await dependencies.afterEvents?.(); } catch { /* Recovery cron retries durable jobs. */ }
   return Response.json({ ok: true });
 }
 

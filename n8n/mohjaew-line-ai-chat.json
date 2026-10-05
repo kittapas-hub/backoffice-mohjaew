@@ -1,0 +1,257 @@
+{
+  "name": "Mohjaew LINE AI Chat v2",
+  "nodes": [
+    {
+      "name": "Mohjaew Ingress",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "mohjaew-ingress",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mohjaew-line-ai-chat-v2",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Mohjaew Shared Secret"
+        }
+      },
+      "webhookId": "e3a95977-e2b0-4d62-9349-a7a304e71fb2"
+    },
+    {
+      "name": "Split Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "split-jobs",
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nif (body?.version !== 2 || !Array.isArray(body.jobs)) throw new Error('Invalid chat envelope');\nreturn body.jobs.slice(0, 20).filter(job => typeof job.jobId === 'string').map(job => ({ json: { jobId: job.jobId }, pairedItem: { item: 0 } }));"
+      }
+    },
+    {
+      "name": "Prepare Chat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "id": "prepare-chat",
+      "parameters": {
+        "method": "POST",
+        "url": "https://backoffice-mohjaew.vercel.app/api/line/chat/prepare",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jobId: $json.jobId }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Mohjaew Shared Secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "name": "Generate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ],
+      "id": "generate-",
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "generate-check",
+              "leftValue": "={{ $json.generate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "GPT-6 Luna",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        -80
+      ],
+      "id": "gpt-6-luna",
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-6-luna', reasoning_effort: 'none', max_completion_tokens: 600, messages: $json.messages }) }}",
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "OpenAI Chat API"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Build Completion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -80
+      ],
+      "id": "build-completion",
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const job = $('Prepare Chat').item.json;\nconst text = $json?.choices?.[0]?.message?.content;\nconst valid = typeof text === 'string' && text.trim().length > 0;\nreturn { json: { jobId: job.jobId, leaseToken: job.leaseToken, ...(valid ? { reply: text.trim().slice(0, 5000) } : { failed: true }) } };"
+      }
+    },
+    {
+      "name": "Complete Chat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -80
+      ],
+      "id": "complete-chat",
+      "parameters": {
+        "method": "POST",
+        "url": "https://backoffice-mohjaew.vercel.app/api/line/chat/complete",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Mohjaew Shared Secret"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    }
+  ],
+  "connections": {
+    "Mohjaew Ingress": {
+      "main": [
+        [
+          {
+            "node": "Split Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Jobs": {
+      "main": [
+        [
+          {
+            "node": "Prepare Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Chat": {
+      "main": [
+        [
+          {
+            "node": "Generate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate?": {
+      "main": [
+        [
+          {
+            "node": "GPT-6 Luna",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "GPT-6 Luna": {
+      "main": [
+        [
+          {
+            "node": "Build Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Completion": {
+      "main": [
+        [
+          {
+            "node": "Complete Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

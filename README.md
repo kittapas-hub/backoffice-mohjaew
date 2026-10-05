@@ -1,5 +1,7 @@
 # Backoffice หมอแจว
 
+**LINE Chat Bot v2:** [คู่มือเชื่อม n8n ทีละขั้น](n8n/README.md) · ปิดเป็นค่าเริ่มต้น · หน้าดูบทสนทนาและพักบอท `/admin/chat`
+
 ระบบจองคิวปรึกษาหมอแจว — Booking Core กลางที่ Website / LINE / Facebook / Instagram
 จะพาลูกค้าเข้ามาจองผ่านฐานข้อมูลและ logic ชุดเดียวกัน
 
@@ -7,8 +9,8 @@
 `/booking?source=<channel>` → `POST /api/bookings` → `createSlotBooking` → `create_booking` RPC
 — ไม่มี booking ไหนถูกสร้างโดยไม่มี `slot_id` LINE OA **ไม่มี conversational booking flow อีกต่อไป**:
 Rich Menu / auto-reply / keyword reply ใน LINE OA Manager (ตั้งค่านอก repo) ชี้ลูกค้าไปที่ลิงก์จองโดยตรง
-`POST /api/line/webhook` เหลือไว้แค่ verify signature แล้วตอบ ok — ไม่สร้าง booking, session,
-image record หรือ storage object ใดๆ และไม่มี reply ที่ต้องพึ่งพา (ไม่มี critical delivery path)
+`POST /api/line/webhook` ตรวจลายเซ็น รักษาระบบแคมเปญ/เชื่อมบัญชีทดสอบเดิม และเมื่อเปิด LINE_CHATBOT_ENABLED จะเก็บข้อความส่วนตัวเข้าคิว Chat Bot ก่อนส่งให้ n8n
+Chat Bot ไม่สร้าง booking, payment, image record หรือ storage object ใดๆ
 
 **Slot booking:** หน้า `/booking` สาธารณะ (mobile-first) ให้ลูกค้าเลือก
 **รอบรายชั่วโมง** (เช่น 18:00–19:00) ที่มี capacity ต่อ slot → สร้าง booking สถานะ `pending_payment`
